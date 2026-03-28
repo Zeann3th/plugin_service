@@ -1,5 +1,8 @@
+use std::net::SocketAddr;
 use std::sync::Arc;
+use std::time::Duration;
 use tower::ServiceBuilder;
+use tower_governor::{GovernorLayer, governor::GovernorConfigBuilder};
 use tower_http::catch_panic::CatchPanicLayer;
 
 mod config;
@@ -16,23 +19,56 @@ use crate::{
     ui::middlewares::{cors, helmet, logger, wrapper},
 };
 
+fn init_tracing() {
+    tracing_subscriber::fmt()
+        .with_env_filter(
+            tracing_subscriber::EnvFilter::try_from_default_env()
+                .unwrap_or_else(|_| "plugin_service=debug,tower_http=debug".into()),
+        )
+        .init();
+}
+
+async fn init_state(config: crate::config::Config) -> SharedState {
+    let db_pool = infrastructure::database::connect(&config.database_url);
+    tracing::info!("Database connected");
+
+    let s3_client = infrastructure::s3::connect(&config).await;
+    infrastructure::s3::ensure_bucket_exists(&s3_client, &config.s3_bucket).await;
+    tracing::info!("S3 connected");
+
+    Arc::new(AppState {
+        config,
+        db_pool,
+        s3_client,
+    })
+}
+
 #[tokio::main]
 async fn main() {
-    tracing_subscriber::fmt()
-        .with_env_filter(tracing_subscriber::EnvFilter::from_default_env())
-        .init();
+    init_tracing();
+    tracing::info!("Starting plugin_service...");
 
     let config = load_config().expect("Failed to load config");
+    tracing::info!("Config loaded");
 
-    let db_pool = infrastructure::database::connect(&config.database_url);
-    let s3_client = infrastructure::s3::connect(&config).await;
+    let addr = format!("{}:{}", config.service_host, config.service_port);
+    let shared_state = init_state(config).await;
 
-    infrastructure::s3::ensure_bucket_exists(&s3_client, &config.s3_bucket).await;
+    let governor_conf = Arc::new(
+        GovernorConfigBuilder::default()
+            .per_second(10)
+            .burst_size(20)
+            .finish()
+            .unwrap(),
+    );
 
-    let shared_state: SharedState = Arc::new(AppState {
-        config: config,
-        db_pool: db_pool,
-        s3_client: s3_client,
+    let limiter = governor_conf.limiter().clone();
+    std::thread::spawn(move || {
+        loop {
+            std::thread::sleep(Duration::from_secs(60));
+            limiter.retain_recent();
+            tracing::info!("rate limiter storage size: {}", limiter.len());
+        }
     });
 
     let app = ui::create_router()
@@ -40,22 +76,22 @@ async fn main() {
             ServiceBuilder::new()
                 .layer(logger::logger_layer())
                 .layer(CatchPanicLayer::custom(wrapper::global_panic_handler))
+                .layer(GovernorLayer::new(governor_conf))
                 .layer(cors::cors_layer())
                 .layer(helmet::helmet_layer()),
         )
         .with_state(Arc::clone(&shared_state));
 
-    let addr = format!(
-        "{}:{}",
-        shared_state.config.service_host, shared_state.config.service_port
-    );
-
     let listener = tokio::net::TcpListener::bind(&addr)
         .await
-        .unwrap_or_else(|e| panic!("Failed to bind to address {}: {}", addr, e));
+        .unwrap_or_else(|e| panic!("Failed to bind to {}: {}", addr, e));
 
-    println!("listening on {}", listener.local_addr().unwrap());
-    axum::serve(listener, app)
-        .await
-        .expect("Failed to run server");
+    tracing::info!("Listening on {}", listener.local_addr().unwrap());
+
+    axum::serve(
+        listener,
+        app.into_make_service_with_connect_info::<SocketAddr>(),
+    )
+    .await
+    .unwrap_or_else(|e| panic!("Server error: {}", e));
 }

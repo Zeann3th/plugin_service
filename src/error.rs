@@ -19,6 +19,7 @@ pub enum ErrorType {
     Failure,
 }
 
+#[derive(Debug)]
 pub enum AppError {
     DatabaseError(String),
     NotFound(String),
@@ -34,6 +35,12 @@ impl IntoResponse for AppError {
             AppError::InternalServerError(msg) => (StatusCode::INTERNAL_SERVER_ERROR, msg),
             AppError::BadRequest(msg) => (StatusCode::BAD_REQUEST, msg),
         };
+
+        if status == StatusCode::INTERNAL_SERVER_ERROR {
+            tracing::error!(status = %status, "{}", message);
+        } else {
+            tracing::warn!(status = %status, "{}", message);
+        }
 
         let body = Json(ApiResponse::<()> {
             message,

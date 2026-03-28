@@ -1,4 +1,10 @@
+use crate::core::user::{
+    model::{AuthResponse, SigninRequest, SignupRequest, UserInfo},
+    service,
+};
+use crate::error::{ApiResponse, AppError, ErrorType};
 use crate::state::SharedState;
+use crate::ui::middlewares::auth::AuthUser;
 use axum::{
     Json, Router,
     extract::State,
@@ -6,9 +12,6 @@ use axum::{
     routing::{get, post},
 };
 use axum_extra::extract::cookie::CookieJar;
-use crate::error::{ApiResponse, AppError, ErrorType};
-use crate::ui::middlewares::auth::AuthUser;
-use crate::core::user::{service, model::{SigninRequest, SignupRequest, AuthResponse, UserInfo}};
 
 pub fn router() -> Router<SharedState> {
     Router::new()

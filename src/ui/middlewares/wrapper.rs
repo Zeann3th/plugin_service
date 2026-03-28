@@ -11,9 +11,12 @@ pub fn global_panic_handler(err: Box<dyn Any + Send + 'static>) -> Response {
         "Unknown panic".to_string()
     };
 
+    tracing::error!("PANIC caught: {}", details);
+
     ApiResponse::<()> {
         message: format!("Internal server error: {}", details),
         error_type: ErrorType::Failure,
         data: None,
-    }.into_response()
+    }
+    .into_response()
 }
