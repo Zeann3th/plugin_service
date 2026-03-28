@@ -1,7 +1,9 @@
-use aws_config::meta::region::RegionProviderChain;
-use aws_sdk_s3::config::{Builder, Credentials, Region};
-use aws_sdk_s3::Client;
 use crate::config::Config;
+use aws_config::meta::region::RegionProviderChain;
+use aws_sdk_s3::Client;
+use aws_sdk_s3::config::{Builder, Credentials, Region};
+use aws_sdk_s3::error::SdkError;
+use aws_sdk_s3::operation::head_bucket::HeadBucketError;
 
 pub async fn connect(config: &Config) -> Client {
     let credentials = Credentials::new(
@@ -27,20 +29,21 @@ pub async fn connect(config: &Config) -> Client {
 }
 
 pub async fn ensure_bucket_exists(client: &Client, bucket: &str) {
-    let resp = client.list_buckets().send().await;
-
-    match resp {
-        Ok(output) => {
-            let buckets = output.buckets();
-            let exists = buckets.iter().any(|b| b.name() == Some(bucket));
-
-            if !exists {
-                tracing::info!("Creating bucket: {}", bucket);
-                client.create_bucket().bucket(bucket).send().await.expect("Failed to create bucket");
-            }
+    match client.head_bucket().bucket(bucket).send().await {
+        Ok(_) => {
+            tracing::info!("Bucket already exists: {}", bucket);
+        }
+        Err(SdkError::ServiceError(err)) if matches!(err.err(), HeadBucketError::NotFound(_)) => {
+            tracing::info!("Creating bucket: {}", bucket);
+            client
+                .create_bucket()
+                .bucket(bucket)
+                .send()
+                .await
+                .expect("Failed to create bucket");
         }
         Err(e) => {
-            tracing::error!("Failed to list buckets: {}", e);
+            tracing::error!("Failed to check bucket: {}", e);
         }
     }
 }
