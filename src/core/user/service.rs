@@ -15,7 +15,7 @@ pub async fn signup_user(state: SharedState, payload: SignupRequest) -> Result<(
         .get()
         .map_err(|e| AppError::DatabaseError(format!("Failed to get DB connection: {}", e)))?;
 
-    let hashed_password = hash(payload.password, 12)
+    let hashed_password = hash(payload.password, 10)
         .map_err(|_| AppError::InternalServerError("Failed to hash password".to_string()))?;
 
     let new_user = NewUser {
