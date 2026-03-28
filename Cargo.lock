@@ -574,6 +574,19 @@ dependencies = [
 ]
 
 [[package]]
+name = "axum-helmet"
+version = "1.0.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "aa7a600f8b28b54bc8229c49b3695fae7b11ed5e95d18028eda02bd08e49c38d"
+dependencies = [
+ "helmet-core",
+ "http 1.4.0",
+ "pin-project-lite",
+ "tower",
+ "tower-service",
+]
+
+[[package]]
 name = "base16ct"
 version = "0.1.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1325,6 +1338,12 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "2304e00983f87ffb38b55b444b5e3b60a884b5d30c0fca7d82fe33449bbe55ea"
 
 [[package]]
+name = "helmet-core"
+version = "1.0.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "ec348149a88631e06368c456a88b15a4f93d5e5fe60bfabddea6463af287b76c"
+
+[[package]]
 name = "hex"
 version = "0.4.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1971,6 +1990,7 @@ dependencies = [
  "aws-smithy-runtime-api",
  "axum",
  "axum-extra",
+ "axum-helmet",
  "bcrypt",
  "chrono",
  "diesel",

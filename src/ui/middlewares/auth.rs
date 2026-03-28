@@ -42,6 +42,7 @@ where
     }
 }
 
+#[allow(dead_code)]
 pub struct OptionalAuthUser(pub Option<Claims>);
 
 impl<S> FromRequestParts<S> for OptionalAuthUser

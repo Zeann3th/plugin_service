@@ -1,7 +1,6 @@
 use std::sync::Arc;
 use tower::ServiceBuilder;
 use tower_http::catch_panic::CatchPanicLayer;
-use tower_http::trace::TraceLayer;
 
 mod config;
 mod core;
@@ -14,7 +13,7 @@ mod ui;
 use crate::{
     config::load_config,
     state::{AppState, SharedState},
-    ui::middlewares::{cors, wrapper},
+    ui::middlewares::{cors, helmet, logger, wrapper},
 };
 
 #[tokio::main]
@@ -28,7 +27,6 @@ async fn main() {
     let db_pool = infrastructure::database::connect(&config.database_url);
     let s3_client = infrastructure::s3::connect(&config).await;
 
-    // Ensure bucket exists
     infrastructure::s3::ensure_bucket_exists(&s3_client, &config.s3_bucket).await;
 
     let shared_state: SharedState = Arc::new(AppState {
@@ -40,9 +38,10 @@ async fn main() {
     let app = ui::create_router()
         .layer(
             ServiceBuilder::new()
-                .layer(TraceLayer::new_for_http())
+                .layer(logger::logger_layer())
                 .layer(CatchPanicLayer::custom(wrapper::global_panic_handler))
-                .layer(cors::cors_layer()),
+                .layer(cors::cors_layer())
+                .layer(helmet::helmet_layer()),
         )
         .with_state(Arc::clone(&shared_state));
 

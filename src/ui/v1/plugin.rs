@@ -1,18 +1,21 @@
+use crate::core::plugin::{model::*, service};
+use crate::error::{ApiResponse, AppError, ErrorType};
 use crate::state::SharedState;
+use crate::ui::middlewares::auth::AuthUser;
 use axum::{
     Json, Router,
-    extract::{State, Query, Path},
+    extract::{Path, Query, State},
     routing::{get, post},
 };
-use crate::error::{ApiResponse, AppError, ErrorType};
-use crate::ui::middlewares::auth::AuthUser;
-use crate::core::plugin::{service, model::*};
 use serde::Deserialize;
 
 pub fn router() -> Router<SharedState> {
     Router::new()
         .route("/", post(create_plugin).get(get_plugins))
-        .route("/{id}", get(get_plugin).patch(update_plugin).delete(delete_plugin))
+        .route(
+            "/{id}",
+            get(get_plugin).patch(update_plugin).delete(delete_plugin),
+        )
         .route("/{id}/vote", post(vote_plugin))
         .route("/{id}/download/{filename}", get(download_plugin))
 }
@@ -96,6 +99,7 @@ async fn vote_plugin(
 }
 
 #[derive(Deserialize)]
+#[allow(dead_code)]
 struct DownloadParams {
     filename: String,
 }
