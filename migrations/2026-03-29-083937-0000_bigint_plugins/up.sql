@@ -1,0 +1,3 @@
+ALTER TABLE plugins ALTER COLUMN id TYPE BIGINT;
+ALTER TABLE plugins ALTER COLUMN id SET DEFAULT nextval('plugins_id_seq');
+ALTER SEQUENCE plugins_id_seq AS BIGINT;

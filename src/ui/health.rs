@@ -23,7 +23,7 @@ async fn health_check(State(state): State<SharedState>) -> Result<ApiResponse<()
 
     Ok(ApiResponse {
         message: "Service is healthy, database connection is active".to_string(),
-        error_type: ErrorType::Sucess,
+        error_type: ErrorType::Success,
         data: None,
     })
 }

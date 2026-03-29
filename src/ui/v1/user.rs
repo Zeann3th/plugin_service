@@ -5,8 +5,9 @@ use crate::core::user::{
 use crate::error::{ApiResponse, AppError, ErrorType};
 use crate::state::SharedState;
 use crate::ui::middlewares::auth::AuthUser;
+use crate::ui::middlewares::validator::ValidatedJson;
 use axum::{
-    Json, Router,
+    Router,
     extract::State,
     response::IntoResponse,
     routing::{get, post},
@@ -22,13 +23,13 @@ pub fn router() -> Router<SharedState> {
 
 async fn signup(
     State(state): State<SharedState>,
-    Json(payload): Json<SignupRequest>,
+    ValidatedJson(payload): ValidatedJson<SignupRequest>,
 ) -> Result<ApiResponse<()>, AppError> {
     service::signup_user(state, payload).await?;
 
     Ok(ApiResponse {
         message: "User created successfully".to_string(),
-        error_type: ErrorType::Sucess,
+        error_type: ErrorType::Success,
         data: None,
     })
 }
@@ -36,13 +37,13 @@ async fn signup(
 async fn signin(
     State(state): State<SharedState>,
     jar: CookieJar,
-    Json(payload): Json<SigninRequest>,
+    ValidatedJson(payload): ValidatedJson<SigninRequest>,
 ) -> Result<(CookieJar, ApiResponse<AuthResponse>), AppError> {
     let (auth_res, refresh_cookie) = service::signin_user(state, payload).await?;
 
     let response = ApiResponse {
         message: "Login successful".to_string(),
-        error_type: ErrorType::Sucess,
+        error_type: ErrorType::Success,
         data: Some(auth_res),
     };
 
@@ -55,7 +56,7 @@ async fn get_profile(
 ) -> impl IntoResponse {
     ApiResponse {
         message: "Profile retrieved successfully".to_string(),
-        error_type: ErrorType::Sucess,
+        error_type: ErrorType::Success,
         data: Some(UserInfo {
             id: claims.sub,
             username: claims.username,

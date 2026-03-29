@@ -15,7 +15,7 @@ pub struct ApiResponse<T> {
 #[derive(Serialize)]
 #[serde(rename_all = "SCREAMING_SNAKE_CASE")]
 pub enum ErrorType {
-    Sucess,
+    Success,
     Failure,
 }
 

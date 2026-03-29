@@ -4,16 +4,29 @@ use diesel::prelude::*;
 use serde::{Deserialize, Serialize};
 use crate::core::auth::jwt::UserRole;
 
-#[derive(Deserialize)]
+use validator::Validate;
+
+#[derive(Deserialize, Validate)]
 pub struct SignupRequest {
+    #[validate(length(min = 3, max = 50, message = "Username must be between 3 and 50 characters"))]
+    #[validate(regex(path = "*crate::core::user::model::RE_USERNAME", message = "Username can only contain letters, numbers, and underscores"))]
     pub username: String,
+    #[validate(email(message = "Invalid email format"))]
     pub email: String,
+    #[validate(length(min = 8, message = "Password must be at least 8 characters long"))]
     pub password: String,
 }
 
-#[derive(Deserialize)]
+use once_cell::sync::Lazy;
+use regex::Regex;
+
+pub static RE_USERNAME: Lazy<Regex> = Lazy::new(|| Regex::new(r"^[a-zA-Z0-9_]+$").unwrap());
+
+#[derive(Deserialize, Validate)]
 pub struct SigninRequest {
-    pub email: String,
+    #[validate(length(min = 1, message = "Identifier is required"))]
+    pub identifier: String, // Can be email or username
+    #[validate(length(min = 1, message = "Password is required"))]
     pub password: String,
 }
 
@@ -25,7 +38,7 @@ pub struct AuthResponse {
 
 #[derive(Serialize, Clone)]
 pub struct UserInfo {
-    pub id: i32,
+    pub id: i64,
     pub username: String,
     pub email: String,
     pub role: UserRole,
@@ -37,7 +50,7 @@ pub struct UserInfo {
 #[diesel(table_name = users)]
 #[diesel(check_for_backend(diesel::pg::Pg))]
 pub struct User {
-    pub id: i32,
+    pub id: i64,
     pub username: String,
     pub email: String,
     pub password_hash: String,

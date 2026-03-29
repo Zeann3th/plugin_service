@@ -2,19 +2,43 @@ use chrono::{Duration, Utc, NaiveDateTime};
 use jsonwebtoken::{decode, encode, DecodingKey, EncodingKey, Header, Validation};
 use serde::{Deserialize, Serialize};
 use crate::error::AppError;
-use diesel_derive_enum::DbEnum;
 
-#[derive(Debug, Serialize, Deserialize, Clone, DbEnum, PartialEq)]
-#[ExistingTypePath = "crate::schema::sql_types::UserRole"]
-#[DbValueStyle = "SCREAMING_SNAKE_CASE"]
+use diesel::deserialize::{self, FromSql, FromSqlRow};
+use diesel::expression::AsExpression;
+use diesel::pg::{Pg, PgValue};
+use diesel::serialize::{self, IsNull, ToSql, Output};
+use std::io::Write;
+
+#[derive(Debug, Serialize, Deserialize, Clone, Copy, PartialEq, AsExpression, FromSqlRow)]
+#[diesel(sql_type = crate::schema::sql_types::UserRole)]
 pub enum UserRole {
     User,
     Admin,
 }
 
+impl ToSql<crate::schema::sql_types::UserRole, Pg> for UserRole {
+    fn to_sql<'b>(&'b self, out: &mut Output<'b, '_, Pg>) -> serialize::Result {
+        match *self {
+            UserRole::User => out.write_all(b"USER")?,
+            UserRole::Admin => out.write_all(b"ADMIN")?,
+        }
+        Ok(IsNull::No)
+    }
+}
+
+impl FromSql<crate::schema::sql_types::UserRole, Pg> for UserRole {
+    fn from_sql(value: PgValue<'_>) -> deserialize::Result<Self> {
+        match value.as_bytes() {
+            b"USER" => Ok(UserRole::User),
+            b"ADMIN" => Ok(UserRole::Admin),
+            _ => Err("Unrecognized enum variant".into()),
+        }
+    }
+}
+
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct Claims {
-    pub sub: i32, // user id
+    pub sub: i64, // user id
     pub username: String,
     pub email: String,
     pub role: UserRole,
@@ -29,7 +53,7 @@ pub enum TokenType {
 }
 
 pub fn create_token(
-    user_id: i32,
+    user_id: i64,
     username: String,
     email: String,
     role: UserRole,

@@ -2,9 +2,10 @@ use crate::core::plugin::{model::*, service};
 use crate::error::{ApiResponse, AppError, ErrorType};
 use crate::state::SharedState;
 use crate::ui::middlewares::auth::AuthUser;
+use crate::ui::middlewares::validator::{ValidatedJson, ValidatedQuery};
 use axum::{
-    Json, Router,
-    extract::{Path, Query, State},
+    Router,
+    extract::{Path, State},
     routing::{get, post},
 };
 use serde::Deserialize;
@@ -23,36 +24,36 @@ pub fn router() -> Router<SharedState> {
 async fn create_plugin(
     AuthUser(claims): AuthUser,
     State(state): State<SharedState>,
-    Json(payload): Json<CreatePluginRequest>,
+    ValidatedJson(payload): ValidatedJson<CreatePluginRequest>,
 ) -> Result<ApiResponse<CreatePluginResponse>, AppError> {
     let data = service::create_plugin(state, claims, payload).await?;
     Ok(ApiResponse {
         message: "Plugin metadata created, use upload_url to upload file".to_string(),
-        error_type: ErrorType::Sucess,
+        error_type: ErrorType::Success,
         data: Some(data),
     })
 }
 
 async fn get_plugins(
     State(state): State<SharedState>,
-    Query(query): Query<PluginQuery>,
+    ValidatedQuery(query): ValidatedQuery<PluginQuery>,
 ) -> Result<ApiResponse<PaginatedResponse<PluginResponse>>, AppError> {
     let data = service::get_plugins(state, query).await?;
     Ok(ApiResponse {
         message: "Plugins retrieved successfully".to_string(),
-        error_type: ErrorType::Sucess,
+        error_type: ErrorType::Success,
         data: Some(data),
     })
 }
 
 async fn get_plugin(
     State(state): State<SharedState>,
-    Path(id): Path<i32>,
+    Path(id): Path<i64>,
 ) -> Result<ApiResponse<PluginResponse>, AppError> {
     let data = service::get_plugin_by_id(state, id).await?;
     Ok(ApiResponse {
         message: "Plugin retrieved successfully".to_string(),
-        error_type: ErrorType::Sucess,
+        error_type: ErrorType::Success,
         data: Some(data),
     })
 }
@@ -60,13 +61,13 @@ async fn get_plugin(
 async fn update_plugin(
     AuthUser(claims): AuthUser,
     State(state): State<SharedState>,
-    Path(id): Path<i32>,
-    Json(payload): Json<UpdatePluginRequest>,
+    Path(id): Path<i64>,
+    ValidatedJson(payload): ValidatedJson<UpdatePluginRequest>,
 ) -> Result<ApiResponse<()>, AppError> {
     service::update_plugin(state, claims, id, payload).await?;
     Ok(ApiResponse {
         message: "Plugin updated successfully".to_string(),
-        error_type: ErrorType::Sucess,
+        error_type: ErrorType::Success,
         data: None,
     })
 }
@@ -74,12 +75,12 @@ async fn update_plugin(
 async fn delete_plugin(
     AuthUser(claims): AuthUser,
     State(state): State<SharedState>,
-    Path(id): Path<i32>,
+    Path(id): Path<i64>,
 ) -> Result<ApiResponse<()>, AppError> {
     service::delete_plugin(state, claims, id).await?;
     Ok(ApiResponse {
         message: "Plugin deleted successfully".to_string(),
-        error_type: ErrorType::Sucess,
+        error_type: ErrorType::Success,
         data: None,
     })
 }
@@ -87,13 +88,13 @@ async fn delete_plugin(
 async fn vote_plugin(
     AuthUser(claims): AuthUser,
     State(state): State<SharedState>,
-    Path(id): Path<i32>,
-    Json(payload): Json<VoteRequest>,
+    Path(id): Path<i64>,
+    ValidatedJson(payload): ValidatedJson<VoteRequest>,
 ) -> Result<ApiResponse<()>, AppError> {
     service::vote_plugin(state, claims, id, payload).await?;
     Ok(ApiResponse {
         message: "Vote recorded successfully".to_string(),
-        error_type: ErrorType::Sucess,
+        error_type: ErrorType::Success,
         data: None,
     })
 }
@@ -106,12 +107,12 @@ struct DownloadParams {
 
 async fn download_plugin(
     State(state): State<SharedState>,
-    Path((id, filename)): Path<(i32, String)>,
+    Path((id, filename)): Path<(i64, String)>,
 ) -> Result<ApiResponse<String>, AppError> {
     let url = service::download_plugin(state, id, filename).await?;
     Ok(ApiResponse {
         message: "Presigned download URL generated".to_string(),
-        error_type: ErrorType::Sucess,
+        error_type: ErrorType::Success,
         data: Some(url),
     })
 }

@@ -8,7 +8,7 @@ pub mod sql_types {
 
 diesel::table! {
     plugins (id) {
-        id -> Int4,
+        id -> Int8,
         #[max_length = 255]
         code -> Varchar,
         #[max_length = 255]

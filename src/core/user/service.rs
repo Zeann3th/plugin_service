@@ -15,6 +15,17 @@ pub async fn signup_user(state: SharedState, payload: SignupRequest) -> Result<(
         .get()
         .map_err(|e| AppError::DatabaseError(format!("Failed to get DB connection: {}", e)))?;
 
+    // Check if user already exists
+    let existing_user = users::table
+        .filter(users::email.eq(&payload.email).or(users::username.eq(&payload.username)))
+        .first::<User>(&mut conn)
+        .optional()
+        .map_err(|e| AppError::DatabaseError(format!("Query failed: {}", e)))?;
+
+    if existing_user.is_some() {
+        return Err(AppError::BadRequest("User with this email or username already exists".to_string()));
+    }
+
     let hashed_password = hash(payload.password, 10)
         .map_err(|_| AppError::InternalServerError("Failed to hash password".to_string()))?;
 
@@ -43,9 +54,9 @@ pub async fn signin_user(
         .map_err(|e| AppError::DatabaseError(format!("Failed to get DB connection: {}", e)))?;
 
     let user = users::table
-        .filter(users::email.eq(payload.email))
+        .filter(users::email.eq(&payload.identifier).or(users::username.eq(&payload.identifier)))
         .first::<User>(&mut conn)
-        .map_err(|_| AppError::BadRequest("Invalid email or password".to_string()))?;
+        .map_err(|_| AppError::BadRequest("Invalid identifier or password".to_string()))?;
 
     if !verify(payload.password, &user.password_hash)
         .map_err(|_| AppError::InternalServerError("Password verification failed".to_string()))?

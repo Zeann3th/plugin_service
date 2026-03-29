@@ -76,6 +76,7 @@ pub async fn create_plugin(
         .put_object()
         .bucket(&state.config.s3_bucket)
         .key(key)
+        .content_length(payload.file_size)
         .presigned(PresigningConfig::expires_in(Duration::from_secs(3600)).unwrap())
         .await
         .map_err(|e| AppError::InternalServerError(format!("Failed to generate presigned URL: {}", e)))?;
@@ -147,7 +148,7 @@ pub async fn get_plugins(
     })
 }
 
-pub async fn get_plugin_by_id(state: SharedState, id: i32) -> Result<PluginResponse, AppError> {
+pub async fn get_plugin_by_id(state: SharedState, id: i64) -> Result<PluginResponse, AppError> {
     let mut conn = state
         .db_pool
         .get()
@@ -177,7 +178,7 @@ pub async fn get_plugin_by_id(state: SharedState, id: i32) -> Result<PluginRespo
 pub async fn update_plugin(
     state: SharedState,
     claims: Claims,
-    id: i32,
+    id: i64,
     payload: UpdatePluginRequest,
 ) -> Result<(), AppError> {
     let mut conn = state
@@ -205,7 +206,7 @@ pub async fn update_plugin(
     Ok(())
 }
 
-pub async fn delete_plugin(state: SharedState, claims: Claims, id: i32) -> Result<(), AppError> {
+pub async fn delete_plugin(state: SharedState, claims: Claims, id: i64) -> Result<(), AppError> {
     let mut conn = state
         .db_pool
         .get()
@@ -229,7 +230,7 @@ pub async fn delete_plugin(state: SharedState, claims: Claims, id: i32) -> Resul
 pub async fn vote_plugin(
     state: SharedState,
     _claims: Claims,
-    id: i32,
+    id: i64,
     payload: VoteRequest,
 ) -> Result<(), AppError> {
     let mut conn = state
@@ -250,7 +251,7 @@ pub async fn vote_plugin(
     Ok(())
 }
 
-pub async fn download_plugin(state: SharedState, id: i32, filename: String) -> Result<String, AppError> {
+pub async fn download_plugin(state: SharedState, id: i64, filename: String) -> Result<String, AppError> {
     let mut conn = state
         .db_pool
         .get()
