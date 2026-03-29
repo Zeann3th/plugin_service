@@ -78,8 +78,8 @@ async fn main() {
                 .layer(logger::logger_layer())
                 .layer(CatchPanicLayer::custom(wrapper::global_panic_handler))
                 .layer(GovernorLayer::new(governor_conf))
-                .layer(cors::cors_layer(&cors_allow_list))
-                .layer(helmet::helmet_layer()),
+                .layer(helmet::helmet_layer())
+                .layer(cors::cors_layer(&cors_allow_list)),
         )
         .with_state(Arc::clone(&shared_state));
 
