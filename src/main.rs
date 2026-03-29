@@ -52,6 +52,7 @@ async fn main() {
     tracing::info!("Config loaded");
 
     let addr = format!("{}:{}", config.service_host, config.service_port);
+    let cors_allow_list = config.cors_allow_list.clone();
     let shared_state = init_state(config).await;
 
     let governor_conf = Arc::new(
@@ -77,7 +78,7 @@ async fn main() {
                 .layer(logger::logger_layer())
                 .layer(CatchPanicLayer::custom(wrapper::global_panic_handler))
                 .layer(GovernorLayer::new(governor_conf))
-                .layer(cors::cors_layer())
+                .layer(cors::cors_layer(&cors_allow_list))
                 .layer(helmet::helmet_layer()),
         )
         .with_state(Arc::clone(&shared_state));
