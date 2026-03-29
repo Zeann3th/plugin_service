@@ -1,7 +1,7 @@
 // @generated automatically by Diesel CLI.
 
 pub mod sql_types {
-    #[derive(diesel::query_builder::QueryId, diesel::sql_types::SqlType)]
+    #[derive(diesel::query_builder::QueryId, Clone, diesel::sql_types::SqlType)]
     #[diesel(postgres_type(name = "user_role"))]
     pub struct UserRole;
 }
@@ -16,7 +16,7 @@ diesel::table! {
         description -> Nullable<Text>,
         #[max_length = 50]
         version -> Varchar,
-        publisher_id -> Int4,
+        publisher_id -> Int8,
         created_at -> Nullable<Timestamp>,
         updated_at -> Nullable<Timestamp>,
         download_count -> Nullable<Int4>,
@@ -30,7 +30,7 @@ diesel::table! {
     use super::sql_types::UserRole;
 
     users (id) {
-        id -> Int4,
+        id -> Int8,
         #[max_length = 255]
         username -> Varchar,
         #[max_length = 255]
