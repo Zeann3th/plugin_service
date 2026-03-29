@@ -24,6 +24,7 @@ pub static RE_USERNAME: Lazy<Regex> = Lazy::new(|| Regex::new(r"^[a-zA-Z0-9_]+$"
 
 #[derive(Deserialize, Validate)]
 pub struct SigninRequest {
+    #[serde(alias = "email")]
     #[validate(length(min = 1, message = "Identifier is required"))]
     pub identifier: String, // Can be email or username
     #[validate(length(min = 1, message = "Password is required"))]
