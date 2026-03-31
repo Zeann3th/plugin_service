@@ -25,6 +25,7 @@ pub enum AppError {
     NotFound(String),
     InternalServerError(String),
     BadRequest(String),
+    Forbidden(String),
 }
 
 impl IntoResponse for AppError {
@@ -34,6 +35,7 @@ impl IntoResponse for AppError {
             AppError::NotFound(msg) => (StatusCode::NOT_FOUND, msg),
             AppError::InternalServerError(msg) => (StatusCode::INTERNAL_SERVER_ERROR, msg),
             AppError::BadRequest(msg) => (StatusCode::BAD_REQUEST, msg),
+            AppError::Forbidden(msg) => (StatusCode::FORBIDDEN, msg),
         };
 
         if status == StatusCode::INTERNAL_SERVER_ERROR {

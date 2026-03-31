@@ -8,7 +8,6 @@ use axum::{
     extract::{Path, State},
     routing::{get, post},
 };
-use serde::Deserialize;
 
 pub fn router() -> Router<SharedState> {
     Router::new()
@@ -18,7 +17,9 @@ pub fn router() -> Router<SharedState> {
             get(get_plugin).patch(update_plugin).delete(delete_plugin),
         )
         .route("/{id}/vote", post(vote_plugin))
-        .route("/{id}/download/{filename}", get(download_plugin))
+        .route("/{id}/upload", post(upload_plugin))
+        .route("/{id}/publish", post(publish_plugin))
+        .route("/{id}/download", get(download_plugin))
 }
 
 async fn create_plugin(
@@ -28,9 +29,36 @@ async fn create_plugin(
 ) -> Result<ApiResponse<CreatePluginResponse>, AppError> {
     let data = service::create_plugin(state, claims, payload).await?;
     Ok(ApiResponse {
-        message: "Plugin metadata created, use upload_url to upload file".to_string(),
+        message: "Plugin created with DRAFT status. Call /upload to attach a file, then /publish to go live.".to_string(),
         error_type: ErrorType::Success,
         data: Some(data),
+    })
+}
+
+async fn upload_plugin(
+    AuthUser(claims): AuthUser,
+    State(state): State<SharedState>,
+    Path(id): Path<i64>,
+    ValidatedJson(payload): ValidatedJson<UploadPluginRequest>,
+) -> Result<ApiResponse<UploadPluginResponse>, AppError> {
+    let data = service::get_upload_url(state, claims, id, payload).await?;
+    Ok(ApiResponse {
+        message: "Upload URL generated. PUT your file to upload_url, then call /publish.".to_string(),
+        error_type: ErrorType::Success,
+        data: Some(data),
+    })
+}
+
+async fn publish_plugin(
+    AuthUser(claims): AuthUser,
+    State(state): State<SharedState>,
+    Path(id): Path<i64>,
+) -> Result<ApiResponse<()>, AppError> {
+    service::publish_plugin(state, claims, id).await?;
+    Ok(ApiResponse {
+        message: "Plugin published successfully".to_string(),
+        error_type: ErrorType::Success,
+        data: None,
     })
 }
 
@@ -99,17 +127,11 @@ async fn vote_plugin(
     })
 }
 
-#[derive(Deserialize)]
-#[allow(dead_code)]
-struct DownloadParams {
-    filename: String,
-}
-
 async fn download_plugin(
     State(state): State<SharedState>,
-    Path((id, filename)): Path<(i64, String)>,
+    Path(id): Path<i64>,
 ) -> Result<ApiResponse<String>, AppError> {
-    let url = service::download_plugin(state, id, filename).await?;
+    let url = service::download_plugin(state, id).await?;
     Ok(ApiResponse {
         message: "Presigned download URL generated".to_string(),
         error_type: ErrorType::Success,

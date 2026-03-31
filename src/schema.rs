@@ -4,9 +4,16 @@ pub mod sql_types {
     #[derive(diesel::query_builder::QueryId, Clone, diesel::sql_types::SqlType)]
     #[diesel(postgres_type(name = "user_role"))]
     pub struct UserRole;
+
+    #[derive(diesel::query_builder::QueryId, Clone, diesel::sql_types::SqlType)]
+    #[diesel(postgres_type(name = "plugin_status"))]
+    pub struct PluginStatus;
 }
 
 diesel::table! {
+    use diesel::sql_types::*;
+    use super::sql_types::PluginStatus;
+
     plugins (id) {
         id -> Int8,
         #[max_length = 255]
@@ -22,6 +29,9 @@ diesel::table! {
         download_count -> Nullable<Int4>,
         upvote_count -> Nullable<Int4>,
         downvote_count -> Nullable<Int4>,
+        status -> PluginStatus,
+        #[max_length = 500]
+        file_path -> Nullable<Varchar>,
     }
 }
 
