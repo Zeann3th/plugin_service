@@ -6,7 +6,7 @@ use crate::ui::middlewares::validator::{ValidatedJson, ValidatedQuery};
 use axum::{
     Router,
     extract::{Path, State, Query},
-    routing::{get, post, patch, delete},
+    routing::{get, post, patch},
 };
 use serde::Deserialize;
 
@@ -56,7 +56,7 @@ async fn upload_plugin(
     })
 }
 
-#[derive(Deserialize)]
+#[derive(Deserialize, Debug)]
 struct PublishQuery {
     version: Option<String>,
 }
@@ -148,7 +148,7 @@ async fn vote_plugin(
     })
 }
 
-#[derive(Deserialize)]
+#[derive(Deserialize, Debug)]
 struct DownloadQuery {
     version: Option<String>,
 }
