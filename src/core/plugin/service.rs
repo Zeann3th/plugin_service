@@ -297,6 +297,26 @@ pub async fn get_plugins(
         count_query = count_query.filter(plugins::id.eq_any(plugin_ids_subquery));
     }
 
+    // Visibility filter for total count and query
+    let requester_id = claims.as_ref().map(|c| c.sub).unwrap_or(0);
+    let is_admin = claims.as_ref().map(|c| c.role == UserRole::Admin).unwrap_or(false);
+
+    if !is_admin {
+        // A plugin is visible if it has at least one published version OR the requester is the owner
+        let published_subquery = plugin_versions::table
+            .filter(plugin_versions::status.eq(PluginStatus::Published))
+            .select(plugin_versions::plugin_id);
+
+        db_query = db_query.filter(
+            plugins::publisher_id.eq(requester_id)
+            .or(plugins::id.eq_any(published_subquery.clone()))
+        );
+        count_query = count_query.filter(
+            plugins::publisher_id.eq(requester_id)
+            .or(plugins::id.eq_any(published_subquery))
+        );
+    }
+
     let total: i64 = count_query
         .count()
         .get_result(&mut conn)
@@ -312,6 +332,8 @@ pub async fn get_plugins(
     let mut items = Vec::new();
 
     for (p, u) in plugins_raw {
+        tracing::debug!("Processing plugin: id={}, code={}", p.id, p.code);
+
         // Fetch tags
         let tags_raw = tags::table
             .inner_join(plugin_tags::table)
@@ -336,6 +358,7 @@ pub async fn get_plugins(
         let is_admin = claims.as_ref().map(|c| c.role == UserRole::Admin).unwrap_or(false);
 
         if latest_v.is_none() && !is_owner && !is_admin {
+            tracing::info!("Skipping plugin {} because it has no published versions and requester is not owner/admin", p.code);
             continue;
         }
 
@@ -350,6 +373,8 @@ pub async fn get_plugins(
                 .optional()
                 .map_err(|e| AppError::DatabaseError(format!("Failed to fetch user plugin: {}", e)))?;
         }
+
+        tracing::debug!("Plugin {} added to response (latest_v={:?}, user_v={:?}, is_owner={})", p.code, latest_v, user_v, is_owner);
 
         items.push(PluginResponse {
             id: p.id,
