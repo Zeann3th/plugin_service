@@ -1,4 +1,4 @@
-use crate::schema::plugins;
+use crate::schema::{plugins, plugin_versions, tags, plugin_tags, user_plugins};
 use chrono::NaiveDateTime;
 use diesel::prelude::*;
 use serde::{Deserialize, Serialize};
@@ -38,6 +38,14 @@ impl FromSql<crate::schema::sql_types::PluginStatus, Pg> for PluginStatus {
     }
 }
 
+#[derive(Debug, Serialize, Deserialize, Clone, Copy, PartialEq)]
+#[serde(rename_all = "SCREAMING_SNAKE_CASE")]
+pub enum InstallationStatus {
+    NotInstalled,
+    Installed,
+    Updatable,
+}
+
 use once_cell::sync::Lazy;
 use regex::Regex;
 
@@ -45,7 +53,6 @@ pub static RE_CODE: Lazy<Regex> = Lazy::new(|| Regex::new(r"^[a-zA-Z0-9-]+$").un
 pub static RE_VERSION: Lazy<Regex> =
     Lazy::new(|| Regex::new(r"^\d+(\.\d+)*(-[a-zA-Z0-9.]+)?$").unwrap());
 
-/// Step 1: Create plugin metadata (no file required yet, status=DRAFT)
 #[derive(Debug, Serialize, Deserialize, Validate)]
 pub struct CreatePluginRequest {
     #[validate(length(min = 3, max = 50, message = "Code must be between 3 and 50 characters"))]
@@ -64,6 +71,7 @@ pub struct CreatePluginRequest {
         message = "Invalid version format (e.g., 1.0.0)"
     ))]
     pub version: String,
+    pub tags: Option<Vec<String>>,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -71,7 +79,6 @@ pub struct CreatePluginResponse {
     pub plugin_id: i64,
 }
 
-/// Step 2: Upload the plugin binary — generates a presigned S3 PUT URL
 #[derive(Debug, Serialize, Deserialize, Validate)]
 pub struct UploadPluginRequest {
     #[validate(length(min = 1, message = "Filename is required"))]
@@ -82,6 +89,7 @@ pub struct UploadPluginRequest {
         message = "File size must be between 1 byte and 210MB"
     ))]
     pub file_size: i64,
+    pub version: Option<String>,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -98,17 +106,26 @@ pub struct UpdatePluginRequest {
 }
 
 #[derive(Debug, Serialize, Deserialize)]
+pub struct PluginVersionResponse {
+    pub version: String,
+    pub status: PluginStatus,
+    pub download_count: i32,
+    pub created_at: NaiveDateTime,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
 pub struct PluginResponse {
     pub id: i64,
     pub code: String,
     pub name: String,
     pub description: Option<String>,
-    pub version: String,
     pub publisher: UserInfo,
-    pub status: PluginStatus,
-    pub download_count: i32,
     pub upvote_count: i32,
     pub downvote_count: i32,
+    pub tags: Vec<String>,
+    pub latest_version: Option<String>,
+    pub installation_status: InstallationStatus,
+    pub versions: Option<Vec<PluginVersionResponse>>,
     pub created_at: NaiveDateTime,
     pub updated_at: NaiveDateTime,
 }
@@ -127,15 +144,11 @@ pub struct Plugin {
     pub code: String,
     pub name: String,
     pub description: Option<String>,
-    pub version: String,
     pub publisher_id: i64,
     pub created_at: Option<NaiveDateTime>,
     pub updated_at: Option<NaiveDateTime>,
-    pub download_count: Option<i32>,
     pub upvote_count: Option<i32>,
     pub downvote_count: Option<i32>,
-    pub status: PluginStatus,
-    pub file_path: Option<String>,
 }
 
 #[derive(Insertable)]
@@ -144,8 +157,68 @@ pub struct NewPlugin {
     pub code: String,
     pub name: String,
     pub description: Option<String>,
-    pub version: String,
     pub publisher_id: i64,
+}
+
+#[derive(Queryable, Selectable, Identifiable, Debug, Clone)]
+#[diesel(table_name = plugin_versions)]
+#[diesel(belongs_to(Plugin))]
+pub struct PluginVersion {
+    pub id: i64,
+    pub plugin_id: i64,
+    pub version: String,
+    pub file_path: Option<String>,
+    pub download_count: Option<i32>,
+    pub status: PluginStatus,
+    pub created_at: Option<NaiveDateTime>,
+    pub updated_at: Option<NaiveDateTime>,
+}
+
+#[derive(Insertable)]
+#[diesel(table_name = plugin_versions)]
+pub struct NewPluginVersion {
+    pub plugin_id: i64,
+    pub version: String,
+    pub status: PluginStatus,
+}
+
+#[derive(Queryable, Selectable, Identifiable, Debug, Clone)]
+#[diesel(table_name = tags)]
+pub struct Tag {
+    pub id: i64,
+    pub name: String,
+    pub created_at: Option<NaiveDateTime>,
+}
+
+#[derive(Insertable)]
+#[diesel(table_name = tags)]
+pub struct NewTag {
+    pub name: String,
+}
+
+#[derive(Insertable)]
+#[diesel(table_name = plugin_tags)]
+pub struct NewPluginTag {
+    pub plugin_id: i64,
+    pub tag_id: i64,
+}
+
+#[derive(Queryable, Selectable, Identifiable, Debug, Clone)]
+#[diesel(table_name = user_plugins)]
+pub struct UserPlugin {
+    pub id: i64,
+    pub user_id: i64,
+    pub plugin_id: i64,
+    pub version: String,
+    pub downloaded_at: NaiveDateTime,
+}
+
+#[derive(Insertable)]
+#[diesel(table_name = user_plugins)]
+pub struct NewUserPlugin {
+    pub user_id: i64,
+    pub plugin_id: i64,
+    pub version: String,
 }
 
 #[derive(Debug, Deserialize, Validate)]
@@ -154,6 +227,7 @@ pub struct PluginQuery {
     pub code: Option<String>,
     #[validate(length(max = 100))]
     pub name: Option<String>,
+    pub tag: Option<String>,
     #[validate(range(min = 1, message = "Page must be at least 1"))]
     pub page: Option<i64>,
     #[validate(range(min = 1, max = 100, message = "Per page must be between 1 and 100"))]

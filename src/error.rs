@@ -28,6 +28,15 @@ pub enum AppError {
     Forbidden(String),
 }
 
+impl From<diesel::result::Error> for AppError {
+    fn from(error: diesel::result::Error) -> Self {
+        match error {
+            diesel::result::Error::NotFound => AppError::NotFound("Record not found".to_string()),
+            _ => AppError::DatabaseError(error.to_string()),
+        }
+    }
+}
+
 impl IntoResponse for AppError {
     fn into_response(self) -> Response {
         let (status, message) = match self {

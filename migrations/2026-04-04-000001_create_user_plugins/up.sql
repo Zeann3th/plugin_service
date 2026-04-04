@@ -1,0 +1,8 @@
+CREATE TABLE user_plugins (
+    id BIGSERIAL PRIMARY KEY,
+    user_id BIGINT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    plugin_id BIGINT NOT NULL REFERENCES plugins(id) ON DELETE CASCADE,
+    version VARCHAR(50) NOT NULL,
+    downloaded_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    UNIQUE (user_id, plugin_id)
+);

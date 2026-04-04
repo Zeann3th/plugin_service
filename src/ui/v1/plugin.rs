@@ -1,13 +1,14 @@
 use crate::core::plugin::{model::*, service};
 use crate::error::{ApiResponse, AppError, ErrorType};
 use crate::state::SharedState;
-use crate::ui::middlewares::auth::AuthUser;
+use crate::ui::middlewares::auth::{AuthUser, OptionalAuthUser};
 use crate::ui::middlewares::validator::{ValidatedJson, ValidatedQuery};
 use axum::{
     Router,
-    extract::{Path, State},
+    extract::{Path, State, Query},
     routing::{get, post},
 };
+use serde::Deserialize;
 
 pub fn router() -> Router<SharedState> {
     Router::new()
@@ -49,24 +50,31 @@ async fn upload_plugin(
     })
 }
 
+#[derive(Deserialize)]
+struct PublishQuery {
+    version: Option<String>,
+}
+
 async fn publish_plugin(
     AuthUser(claims): AuthUser,
     State(state): State<SharedState>,
     Path(id): Path<i64>,
+    Query(query): Query<PublishQuery>,
 ) -> Result<ApiResponse<()>, AppError> {
-    service::publish_plugin(state, claims, id).await?;
+    service::publish_plugin(state, claims, id, query.version).await?;
     Ok(ApiResponse {
-        message: "Plugin published successfully".to_string(),
+        message: "Plugin version published successfully".to_string(),
         error_type: ErrorType::Success,
         data: None,
     })
 }
 
 async fn get_plugins(
+    OptionalAuthUser(claims): OptionalAuthUser,
     State(state): State<SharedState>,
     ValidatedQuery(query): ValidatedQuery<PluginQuery>,
 ) -> Result<ApiResponse<PaginatedResponse<PluginResponse>>, AppError> {
-    let data = service::get_plugins(state, query).await?;
+    let data = service::get_plugins(state, claims, query).await?;
     Ok(ApiResponse {
         message: "Plugins retrieved successfully".to_string(),
         error_type: ErrorType::Success,
@@ -75,10 +83,11 @@ async fn get_plugins(
 }
 
 async fn get_plugin(
+    OptionalAuthUser(claims): OptionalAuthUser,
     State(state): State<SharedState>,
     Path(id): Path<i64>,
 ) -> Result<ApiResponse<PluginResponse>, AppError> {
-    let data = service::get_plugin_by_id(state, id).await?;
+    let data = service::get_plugin_by_id(state, claims, id).await?;
     Ok(ApiResponse {
         message: "Plugin retrieved successfully".to_string(),
         error_type: ErrorType::Success,
@@ -127,11 +136,18 @@ async fn vote_plugin(
     })
 }
 
+#[derive(Deserialize)]
+struct DownloadQuery {
+    version: Option<String>,
+}
+
 async fn download_plugin(
+    OptionalAuthUser(claims): OptionalAuthUser,
     State(state): State<SharedState>,
     Path(id): Path<i64>,
+    Query(query): Query<DownloadQuery>,
 ) -> Result<ApiResponse<String>, AppError> {
-    let url = service::download_plugin(state, id).await?;
+    let url = service::download_plugin(state, claims, id, query.version).await?;
     Ok(ApiResponse {
         message: "Presigned download URL generated".to_string(),
         error_type: ErrorType::Success,

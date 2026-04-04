@@ -9,6 +9,7 @@ pub struct Config {
     pub s3_endpoint: String,
     pub s3_region: String,
     pub s3_bucket: String,
+    pub s3_public_endpoint: String,
     pub cors_allow_list: String,
 }
 
@@ -32,6 +33,7 @@ pub fn load_config() -> Result<Config, String> {
         s3_endpoint: get_env("S3_ENDPOINT")?,
         s3_region: get_env("S3_REGION")?,
         s3_bucket: get_env("S3_BUCKET")?,
+        s3_public_endpoint: get_env("S3_PUBLIC_ENDPOINT")?,
         cors_allow_list: get_env("CORS_ALLOW_LIST")?,
     })
 }
