@@ -29,6 +29,7 @@ pub async fn create_plugin(
         // Check if code is taken by another author
         let existing_plugin: Option<Plugin> = plugins::table
             .filter(plugins::code.eq(&payload.code))
+            .select(Plugin::as_select())
             .first::<Plugin>(conn)
             .optional()
             .map_err(|e| AppError::DatabaseError(format!("Query failed: {}", e)))?;
@@ -44,8 +45,8 @@ pub async fn create_plugin(
             let existing_version = plugin_versions::table
                 .filter(plugin_versions::plugin_id.eq(plugin.id))
                 .filter(plugin_versions::version.eq(&payload.version))
-                .first::<PluginVersion>(conn)
-                .optional()
+                .select(PluginVersion::as_select())
+                .first::<PluginVersion>(conn)                .optional()
                 .map_err(|e| AppError::DatabaseError(format!("Query failed: {}", e)))?;
 
             if existing_version.is_some() {
@@ -64,6 +65,7 @@ pub async fn create_plugin(
 
             let plugin: Plugin = diesel::insert_into(plugins::table)
                 .values(&new_plugin)
+                .returning(Plugin::as_select())
                 .get_result(conn)
                 .map_err(|e| AppError::DatabaseError(format!("Failed to create plugin: {}", e)))?;
             plugin.id
@@ -128,6 +130,7 @@ pub async fn get_upload_url(
 
     let plugin = plugins::table
         .filter(plugins::id.eq(id))
+        .select(Plugin::as_select())
         .first::<Plugin>(&mut conn)
         .map_err(|_| AppError::NotFound("Plugin not found".to_string()))?;
 
@@ -210,6 +213,7 @@ pub async fn publish_plugin(
 
     let plugin = plugins::table
         .filter(plugins::id.eq(id))
+        .select(Plugin::as_select())
         .first::<Plugin>(&mut conn)
         .map_err(|_| AppError::NotFound("Plugin not found".to_string()))?;
 
@@ -424,6 +428,7 @@ pub async fn get_plugin_by_id(state: SharedState, claims: Option<Claims>, id: i6
     let (p, u): (Plugin, crate::core::user::model::User) = plugins::table
         .inner_join(users::table)
         .filter(plugins::id.eq(id))
+        .select((Plugin::as_select(), crate::core::user::model::User::as_select()))
         .first(&mut conn)
         .map_err(|_| AppError::NotFound("Plugin not found".to_string()))?;
 
@@ -462,6 +467,7 @@ pub async fn get_plugin_by_id(state: SharedState, claims: Option<Claims>, id: i6
     }
 
     let versions_raw = v_query
+        .select(PluginVersion::as_select())
         .order_by(plugin_versions::created_at.desc())
         .load::<PluginVersion>(&mut conn)
         .map_err(|e| AppError::DatabaseError(format!("Failed to load versions: {}", e)))?;
@@ -516,6 +522,7 @@ pub async fn update_plugin(
     conn.transaction::<_, AppError, _>(|conn| {
         let plugin = plugins::table
             .filter(plugins::id.eq(id))
+            .select(Plugin::as_select())
             .first::<Plugin>(conn)
             .map_err(|_| AppError::NotFound("Plugin not found".to_string()))?;
 
@@ -588,6 +595,7 @@ pub async fn update_plugin_version(
     conn.transaction::<_, AppError, _>(|conn| {
         let plugin = plugins::table
             .filter(plugins::id.eq(id))
+            .select(Plugin::as_select())
             .first::<Plugin>(conn)
             .map_err(|_| AppError::NotFound("Plugin not found".to_string()))?;
 
@@ -628,6 +636,7 @@ pub async fn delete_plugin(state: SharedState, claims: Claims, id: i64) -> Resul
     conn.transaction::<_, AppError, _>(|conn| {
         let plugin = plugins::table
             .filter(plugins::id.eq(id))
+            .select(Plugin::as_select())
             .first::<Plugin>(conn)
             .map_err(|_| AppError::NotFound("Plugin not found".to_string()))?;
 
@@ -663,6 +672,7 @@ pub async fn delete_plugin_version(
     conn.transaction::<_, AppError, _>(|conn| {
         let plugin = plugins::table
             .filter(plugins::id.eq(id))
+            .select(Plugin::as_select())
             .first::<Plugin>(conn)
             .map_err(|_| AppError::NotFound("Plugin not found".to_string()))?;
 
