@@ -303,6 +303,7 @@ pub async fn get_plugins(
         .map_err(|e| AppError::DatabaseError(format!("Failed to count plugins: {}", e)))?;
 
     let plugins_raw: Vec<(Plugin, crate::core::user::model::User)> = db_query
+        .select((Plugin::as_select(), crate::core::user::model::User::as_select()))
         .limit(per_page)
         .offset(offset)
         .load(&mut conn)
