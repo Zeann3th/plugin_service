@@ -8,6 +8,7 @@ use super::model::*;
 use aws_sdk_s3::presigning::PresigningConfig;
 use diesel::prelude::*;
 use diesel::pg::PgConnection;
+use std::collections::HashMap;
 use std::path::Path;
 use std::time::Duration;
 
@@ -342,54 +343,74 @@ pub async fn get_plugins(
         .load(&mut conn)
         .map_err(|e| AppError::DatabaseError(format!("Failed to load plugins: {}", e)))?;
 
-    let mut items = Vec::new();
+    if plugins_raw.is_empty() {
+        return Ok(PaginatedResponse {
+            items: Vec::new(),
+            total,
+            page,
+            per_page,
+        });
+    }
 
-    for (p, u) in plugins_raw {
-        tracing::debug!("Processing plugin: id={}, code={}", p.id, p.code);
+    let plugin_ids: Vec<i64> = plugins_raw.iter().map(|(p, _)| p.id).collect();
 
-        // Fetch tags
-        let tags_raw = tags::table
-            .inner_join(plugin_tags::table)
-            .filter(plugin_tags::plugin_id.eq(p.id))
-            .select(tags::name)
-            .load::<String>(&mut conn)
-            .map_err(|e| AppError::DatabaseError(format!("Failed to load tags: {}", e)))?;
+    // Batch fetch tags
+    let all_tags_raw: Vec<(i64, String)> = plugin_tags::table
+        .inner_join(tags::table)
+        .filter(plugin_tags::plugin_id.eq_any(&plugin_ids))
+        .select((plugin_tags::plugin_id, tags::name))
+        .load(&mut conn)
+        .map_err(|e| AppError::DatabaseError(format!("Failed to load tags: {}", e)))?;
 
-        // Get latest version
-        let latest_v: Option<String> = plugin_versions::table
-            .filter(plugin_versions::plugin_id.eq(p.id))
-            .filter(plugin_versions::status.eq(PluginStatus::Published))
-            .order_by(plugin_versions::created_at.desc())
-            .select(plugin_versions::version)
-            .first::<String>(&mut conn)
-            .optional()
-            .map_err(|e| AppError::DatabaseError(format!("Failed to fetch latest version: {}", e)))?;
+    let mut tags_map: HashMap<i64, Vec<String>> = HashMap::new();
+    for (pid, tname) in all_tags_raw {
+        tags_map.entry(pid).or_default().push(tname);
+    }
 
-        // Visibility control: a plugin is visible if it has at least one published version,
-        // or if the requester is the owner/admin.
-        let is_owner = claims.as_ref().map(|c| c.sub == p.publisher_id).unwrap_or(false);
-        let is_admin = claims.as_ref().map(|c| c.role == UserRole::Admin).unwrap_or(false);
+    // Batch fetch latest versions (using DISTINCT ON if Postgres, but for simplicity we load all published and pick latest in memory)
+    // Actually, Postgres DISTINCT ON is better:
+    let latest_versions_raw: Vec<PluginVersion> = plugin_versions::table
+        .filter(plugin_versions::plugin_id.eq_any(&plugin_ids))
+        .filter(plugin_versions::status.eq(PluginStatus::Published))
+        .order_by((plugin_versions::plugin_id, plugin_versions::created_at.desc()))
+        .distinct_on(plugin_versions::plugin_id)
+        .select(PluginVersion::as_select())
+        .load(&mut conn)
+        .map_err(|e| AppError::DatabaseError(format!("Failed to load latest versions: {}", e)))?;
 
+    let mut latest_versions_map: HashMap<i64, String> = HashMap::new();
+    for v in latest_versions_raw {
+        latest_versions_map.insert(v.plugin_id, v.version);
+    }
+
+    // Batch fetch user installations
+    let mut user_versions_map: HashMap<i64, String> = HashMap::new();
+    if let Some(ref c) = claims {
+        let user_plugins_raw: Vec<(i64, String)> = user_plugins::table
+            .filter(user_plugins::user_id.eq(c.sub))
+            .filter(user_plugins::plugin_id.eq_any(&plugin_ids))
+            .select((user_plugins::plugin_id, user_plugins::version))
+            .load(&mut conn)
+            .map_err(|e| AppError::DatabaseError(format!("Failed to load user installations: {}", e)))?;
+        
+        for (pid, v) in user_plugins_raw {
+            user_versions_map.insert(pid, v);
+        }
+    }
+
+    let items = plugins_raw.into_iter().filter_map(|(p, u)| {
+        let latest_v = latest_versions_map.get(&p.id).cloned();
+        
+        // Visibility control
+        let is_owner = requester_id == p.publisher_id;
         if latest_v.is_none() && !is_owner && !is_admin {
-            tracing::info!("Skipping plugin {} because it has no published versions and requester is not owner/admin", p.code);
-            continue;
+            return None;
         }
 
-        // Check user installation status
-        let mut user_v: Option<String> = None;
-        if let Some(ref c) = claims {
-            user_v = user_plugins::table
-                .filter(user_plugins::user_id.eq(c.sub))
-                .filter(user_plugins::plugin_id.eq(p.id))
-                .select(user_plugins::version)
-                .first::<String>(&mut conn)
-                .optional()
-                .map_err(|e| AppError::DatabaseError(format!("Failed to fetch user plugin: {}", e)))?;
-        }
+        let user_v = user_versions_map.get(&p.id).cloned();
+        let tags = tags_map.remove(&p.id).unwrap_or_default();
 
-        tracing::debug!("Plugin {} added to response (latest_v={:?}, user_v={:?}, is_owner={})", p.code, latest_v, user_v, is_owner);
-
-        items.push(PluginResponse {
+        Some(PluginResponse {
             id: p.id,
             code: p.code,
             name: p.name,
@@ -400,14 +421,14 @@ pub async fn get_plugins(
             },
             upvote_count: p.upvote_count.unwrap_or(0),
             downvote_count: p.downvote_count.unwrap_or(0),
-            tags: tags_raw,
+            tags,
             latest_version: latest_v.clone(),
             installation_status: get_installation_status(&latest_v, &user_v),
             versions: None,
             created_at: p.created_at.unwrap_or_else(|| chrono::Utc::now().naive_utc()),
             updated_at: p.updated_at.unwrap_or_else(|| chrono::Utc::now().naive_utc()),
-        });
-    }
+        })
+    }).collect();
 
     Ok(PaginatedResponse {
         items,
