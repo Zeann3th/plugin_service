@@ -9,11 +9,14 @@ use axum_extra::extract::cookie::{Cookie, SameSite};
 use bcrypt::{hash, verify};
 use diesel::prelude::*;
 
+#[tracing::instrument(skip(state, payload))]
 pub async fn signup_user(state: SharedState, payload: SignupRequest) -> Result<(), AppError> {
     let mut conn = state
         .db_pool
         .get()
         .map_err(|e| AppError::DatabaseError(format!("Failed to get DB connection: {}", e)))?;
+
+    tracing::info!("Signing up user: {}", payload.username);
 
     // Check if user already exists
     let existing_user = users::table
@@ -44,10 +47,12 @@ pub async fn signup_user(state: SharedState, payload: SignupRequest) -> Result<(
     Ok(())
 }
 
+#[tracing::instrument(skip(state, payload))]
 pub async fn signin_user(
     state: SharedState,
     payload: SigninRequest,
 ) -> Result<(AuthResponse, Cookie<'static>), AppError> {
+    tracing::info!("Signing in user: {}", payload.identifier);
     let mut conn = state
         .db_pool
         .get()

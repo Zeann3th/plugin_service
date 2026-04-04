@@ -103,6 +103,12 @@ pub struct UpdatePluginRequest {
     pub name: Option<String>,
     #[validate(length(max = 1000, message = "Description must not exceed 1000 characters"))]
     pub description: Option<String>,
+    pub tags: Option<Vec<String>>,
+}
+
+#[derive(Debug, Serialize, Deserialize, Validate)]
+pub struct UpdatePluginVersionRequest {
+    pub status: Option<PluginStatus>,
 }
 
 #[derive(Debug, Serialize, Deserialize)]

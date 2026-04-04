@@ -21,6 +21,7 @@ pub fn router() -> Router<SharedState> {
         .route("/profile", get(get_profile))
 }
 
+#[tracing::instrument(skip(state, payload))]
 async fn signup(
     State(state): State<SharedState>,
     ValidatedJson(payload): ValidatedJson<SignupRequest>,
@@ -34,6 +35,7 @@ async fn signup(
     })
 }
 
+#[tracing::instrument(skip(state, payload, jar))]
 async fn signin(
     State(state): State<SharedState>,
     jar: CookieJar,
@@ -50,6 +52,7 @@ async fn signin(
     Ok((jar.add(refresh_cookie), response))
 }
 
+#[tracing::instrument(skip(_state))]
 async fn get_profile(
     AuthUser(claims): AuthUser,
     State(_state): State<SharedState>,

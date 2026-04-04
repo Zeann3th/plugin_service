@@ -95,4 +95,6 @@ async fn main() {
     )
     .await
     .unwrap_or_else(|e| panic!("Server error: {}", e));
+
+    tracing::info!("Server stopped.");
 }

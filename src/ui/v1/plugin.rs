@@ -6,7 +6,7 @@ use crate::ui::middlewares::validator::{ValidatedJson, ValidatedQuery};
 use axum::{
     Router,
     extract::{Path, State, Query},
-    routing::{get, post},
+    routing::{get, post, patch, delete},
 };
 use serde::Deserialize;
 
@@ -17,12 +17,17 @@ pub fn router() -> Router<SharedState> {
             "/{id}",
             get(get_plugin).patch(update_plugin).delete(delete_plugin),
         )
+        .route(
+            "/{id}/versions/{version}",
+            patch(update_plugin_version).delete(delete_plugin_version),
+        )
         .route("/{id}/vote", post(vote_plugin))
         .route("/{id}/upload", post(upload_plugin))
         .route("/{id}/publish", post(publish_plugin))
         .route("/{id}/download", get(download_plugin))
 }
 
+#[tracing::instrument(skip(state))]
 async fn create_plugin(
     AuthUser(claims): AuthUser,
     State(state): State<SharedState>,
@@ -36,6 +41,7 @@ async fn create_plugin(
     })
 }
 
+#[tracing::instrument(skip(state))]
 async fn upload_plugin(
     AuthUser(claims): AuthUser,
     State(state): State<SharedState>,
@@ -55,6 +61,7 @@ struct PublishQuery {
     version: Option<String>,
 }
 
+#[tracing::instrument(skip(state))]
 async fn publish_plugin(
     AuthUser(claims): AuthUser,
     State(state): State<SharedState>,
@@ -69,6 +76,7 @@ async fn publish_plugin(
     })
 }
 
+#[tracing::instrument(skip(state))]
 async fn get_plugins(
     OptionalAuthUser(claims): OptionalAuthUser,
     State(state): State<SharedState>,
@@ -82,6 +90,7 @@ async fn get_plugins(
     })
 }
 
+#[tracing::instrument(skip(state))]
 async fn get_plugin(
     OptionalAuthUser(claims): OptionalAuthUser,
     State(state): State<SharedState>,
@@ -95,6 +104,7 @@ async fn get_plugin(
     })
 }
 
+#[tracing::instrument(skip(state))]
 async fn update_plugin(
     AuthUser(claims): AuthUser,
     State(state): State<SharedState>,
@@ -109,6 +119,7 @@ async fn update_plugin(
     })
 }
 
+#[tracing::instrument(skip(state))]
 async fn delete_plugin(
     AuthUser(claims): AuthUser,
     State(state): State<SharedState>,
@@ -122,6 +133,7 @@ async fn delete_plugin(
     })
 }
 
+#[tracing::instrument(skip(state))]
 async fn vote_plugin(
     AuthUser(claims): AuthUser,
     State(state): State<SharedState>,
@@ -141,6 +153,7 @@ struct DownloadQuery {
     version: Option<String>,
 }
 
+#[tracing::instrument(skip(state))]
 async fn download_plugin(
     OptionalAuthUser(claims): OptionalAuthUser,
     State(state): State<SharedState>,
@@ -152,5 +165,34 @@ async fn download_plugin(
         message: "Presigned download URL generated".to_string(),
         error_type: ErrorType::Success,
         data: Some(url),
+    })
+}
+
+#[tracing::instrument(skip(state))]
+async fn update_plugin_version(
+    AuthUser(claims): AuthUser,
+    State(state): State<SharedState>,
+    Path((id, version)): Path<(i64, String)>,
+    ValidatedJson(payload): ValidatedJson<UpdatePluginVersionRequest>,
+) -> Result<ApiResponse<()>, AppError> {
+    service::update_plugin_version(state, claims, id, version, payload).await?;
+    Ok(ApiResponse {
+        message: "Plugin version updated successfully".to_string(),
+        error_type: ErrorType::Success,
+        data: None,
+    })
+}
+
+#[tracing::instrument(skip(state))]
+async fn delete_plugin_version(
+    AuthUser(claims): AuthUser,
+    State(state): State<SharedState>,
+    Path((id, version)): Path<(i64, String)>,
+) -> Result<ApiResponse<()>, AppError> {
+    service::delete_plugin_version(state, claims, id, version).await?;
+    Ok(ApiResponse {
+        message: "Plugin version deleted successfully".to_string(),
+        error_type: ErrorType::Success,
+        data: None,
     })
 }
