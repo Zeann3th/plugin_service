@@ -1,0 +1,1 @@
+ALTER TABLE plugins ADD COLUMN github_repo VARCHAR(255);

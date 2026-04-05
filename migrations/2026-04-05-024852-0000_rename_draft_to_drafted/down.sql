@@ -1,0 +1,1 @@
+ALTER TYPE plugin_status RENAME VALUE 'DRAFTED' TO 'DRAFT';

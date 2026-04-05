@@ -2,13 +2,12 @@ use crate::core::plugin::{model::*, service};
 use crate::error::{ApiResponse, AppError, ErrorType};
 use crate::state::SharedState;
 use crate::ui::middlewares::auth::{AuthUser, OptionalAuthUser};
-use crate::ui::middlewares::validator::{ValidatedJson, ValidatedQuery};
+use crate::ui::middlewares::validator::ValidatedJson;
 use axum::{
-    Router,
     extract::{Path, State, Query},
     routing::{get, post, patch},
+    Router,
 };
-use serde::Deserialize;
 
 pub fn router() -> Router<SharedState> {
     Router::new()
@@ -21,10 +20,9 @@ pub fn router() -> Router<SharedState> {
             "/{id}/versions/{version}",
             patch(update_plugin_version).delete(delete_plugin_version),
         )
+        .route("/{id}/versions/{version}/upload", post(upload_plugin))
+        .route("/{id}/versions/{version}/publish", post(publish_plugin))
         .route("/{id}/vote", post(vote_plugin))
-        .route("/{id}/upload", post(upload_plugin))
-        .route("/{id}/publish", post(publish_plugin))
-        .route("/{id}/download", get(download_plugin))
 }
 
 #[tracing::instrument(skip(state))]
@@ -42,49 +40,14 @@ async fn create_plugin(
 }
 
 #[tracing::instrument(skip(state))]
-async fn upload_plugin(
-    AuthUser(claims): AuthUser,
-    State(state): State<SharedState>,
-    Path(id): Path<i64>,
-    ValidatedJson(payload): ValidatedJson<UploadPluginRequest>,
-) -> Result<ApiResponse<UploadPluginResponse>, AppError> {
-    let data = service::get_upload_url(state, claims, id, payload).await?;
-    Ok(ApiResponse {
-        message: "Upload URL generated. PUT your file to upload_url, then call /publish.".to_string(),
-        error_type: ErrorType::Success,
-        data: Some(data),
-    })
-}
-
-#[derive(Deserialize, Debug)]
-struct PublishQuery {
-    version: Option<String>,
-}
-
-#[tracing::instrument(skip(state))]
-async fn publish_plugin(
-    AuthUser(claims): AuthUser,
-    State(state): State<SharedState>,
-    Path(id): Path<i64>,
-    Query(query): Query<PublishQuery>,
-) -> Result<ApiResponse<()>, AppError> {
-    service::publish_plugin(state, claims, id, query.version).await?;
-    Ok(ApiResponse {
-        message: "Plugin version published successfully".to_string(),
-        error_type: ErrorType::Success,
-        data: None,
-    })
-}
-
-#[tracing::instrument(skip(state))]
 async fn get_plugins(
     OptionalAuthUser(claims): OptionalAuthUser,
     State(state): State<SharedState>,
-    ValidatedQuery(query): ValidatedQuery<PluginQuery>,
+    Query(query): Query<PluginQuery>,
 ) -> Result<ApiResponse<PaginatedResponse<PluginResponse>>, AppError> {
     let data = service::get_plugins(state, claims, query).await?;
     Ok(ApiResponse {
-        message: "Plugins retrieved successfully".to_string(),
+        message: "Plugins loaded successfully".to_string(),
         error_type: ErrorType::Success,
         data: Some(data),
     })
@@ -98,7 +61,7 @@ async fn get_plugin(
 ) -> Result<ApiResponse<PluginResponse>, AppError> {
     let data = service::get_plugin_by_id(state, claims, id).await?;
     Ok(ApiResponse {
-        message: "Plugin retrieved successfully".to_string(),
+        message: "Plugin details loaded successfully".to_string(),
         error_type: ErrorType::Success,
         data: Some(data),
     })
@@ -134,37 +97,31 @@ async fn delete_plugin(
 }
 
 #[tracing::instrument(skip(state))]
-async fn vote_plugin(
+async fn upload_plugin(
     AuthUser(claims): AuthUser,
     State(state): State<SharedState>,
-    Path(id): Path<i64>,
-    ValidatedJson(payload): ValidatedJson<VoteRequest>,
-) -> Result<ApiResponse<()>, AppError> {
-    service::vote_plugin(state, claims, id, payload).await?;
+    Path((id, version)): Path<(i64, String)>,
+    ValidatedJson(payload): ValidatedJson<UploadPluginRequest>,
+) -> Result<ApiResponse<UploadPluginResponse>, AppError> {
+    let data = service::get_upload_url(state, claims, id, version, payload).await?;
     Ok(ApiResponse {
-        message: "Vote recorded successfully".to_string(),
+        message: "Upload URL generated. PUT your file to upload_url, then call /publish.".to_string(),
         error_type: ErrorType::Success,
-        data: None,
+        data: Some(data),
     })
 }
 
-#[derive(Deserialize, Debug)]
-struct DownloadQuery {
-    version: Option<String>,
-}
-
 #[tracing::instrument(skip(state))]
-async fn download_plugin(
-    OptionalAuthUser(claims): OptionalAuthUser,
+async fn publish_plugin(
+    AuthUser(claims): AuthUser,
     State(state): State<SharedState>,
-    Path(id): Path<i64>,
-    Query(query): Query<DownloadQuery>,
-) -> Result<ApiResponse<String>, AppError> {
-    let url = service::download_plugin(state, claims, id, query.version).await?;
+    Path((id, version)): Path<(i64, String)>,
+) -> Result<ApiResponse<()>, AppError> {
+    service::publish_plugin(state, claims, id, version).await?;
     Ok(ApiResponse {
-        message: "Presigned download URL generated".to_string(),
+        message: "Plugin version published successfully".to_string(),
         error_type: ErrorType::Success,
-        data: Some(url),
+        data: None,
     })
 }
 
@@ -177,7 +134,7 @@ async fn update_plugin_version(
 ) -> Result<ApiResponse<()>, AppError> {
     service::update_plugin_version(state, claims, id, version, payload).await?;
     Ok(ApiResponse {
-        message: "Plugin version updated successfully".to_string(),
+        message: "Plugin version status updated successfully".to_string(),
         error_type: ErrorType::Success,
         data: None,
     })
@@ -192,6 +149,21 @@ async fn delete_plugin_version(
     service::delete_plugin_version(state, claims, id, version).await?;
     Ok(ApiResponse {
         message: "Plugin version deleted successfully".to_string(),
+        error_type: ErrorType::Success,
+        data: None,
+    })
+}
+
+#[tracing::instrument(skip(state))]
+async fn vote_plugin(
+    AuthUser(claims): AuthUser,
+    State(state): State<SharedState>,
+    Path(id): Path<i64>,
+    ValidatedJson(payload): ValidatedJson<VoteRequest>,
+) -> Result<ApiResponse<()>, AppError> {
+    service::vote_plugin(state, claims, id, payload).await?;
+    Ok(ApiResponse {
+        message: "Vote recorded successfully".to_string(),
         error_type: ErrorType::Success,
         data: None,
     })

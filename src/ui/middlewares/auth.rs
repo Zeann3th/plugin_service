@@ -14,6 +14,7 @@ use axum_extra::{
 };
 use std::future::Future;
 
+#[derive(Debug, Clone)]
 pub struct AuthUser(pub Claims);
 
 impl<S> FromRequestParts<S> for AuthUser
@@ -43,6 +44,7 @@ where
 }
 
 #[allow(dead_code)]
+#[derive(Debug, Clone)]
 pub struct OptionalAuthUser(pub Option<Claims>);
 
 impl<S> FromRequestParts<S> for OptionalAuthUser

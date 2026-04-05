@@ -12,16 +12,17 @@ use std::io::Write;
 
 #[derive(Debug, Serialize, Deserialize, Clone, Copy, PartialEq, AsExpression, FromSqlRow)]
 #[diesel(sql_type = crate::schema::sql_types::PluginStatus)]
-#[serde(rename_all = "SCREAMING_SNAKE_CASE")]
 pub enum PluginStatus {
+    #[serde(rename = "DRAFTED")]
     Draft,
+    #[serde(rename = "PUBLISHED")]
     Published,
 }
 
 impl ToSql<crate::schema::sql_types::PluginStatus, Pg> for PluginStatus {
     fn to_sql<'b>(&'b self, out: &mut Output<'b, '_, Pg>) -> serialize::Result {
         match *self {
-            PluginStatus::Draft => out.write_all(b"DRAFT")?,
+            PluginStatus::Draft => out.write_all(b"DRAFTED")?,
             PluginStatus::Published => out.write_all(b"PUBLISHED")?,
         }
         Ok(IsNull::No)
@@ -31,7 +32,7 @@ impl ToSql<crate::schema::sql_types::PluginStatus, Pg> for PluginStatus {
 impl FromSql<crate::schema::sql_types::PluginStatus, Pg> for PluginStatus {
     fn from_sql(value: PgValue<'_>) -> deserialize::Result<Self> {
         match value.as_bytes() {
-            b"DRAFT" => Ok(PluginStatus::Draft),
+            b"DRAFTED" => Ok(PluginStatus::Draft),
             b"PUBLISHED" => Ok(PluginStatus::Published),
             _ => Err("Unrecognized plugin_status variant".into()),
         }
@@ -65,6 +66,7 @@ pub struct CreatePluginRequest {
     pub name: String,
     #[validate(length(max = 1000, message = "Description must not exceed 1000 characters"))]
     pub description: Option<String>,
+    pub github_repo: Option<String>,
     #[validate(length(min = 1, max = 20, message = "Version must be between 1 and 20 characters"))]
     #[validate(regex(
         path = "*crate::core::plugin::model::RE_VERSION",
@@ -89,7 +91,6 @@ pub struct UploadPluginRequest {
         message = "File size must be between 1 byte and 210MB"
     ))]
     pub file_size: i64,
-    pub version: Option<String>,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -103,6 +104,8 @@ pub struct UpdatePluginRequest {
     pub name: Option<String>,
     #[validate(length(max = 1000, message = "Description must not exceed 1000 characters"))]
     pub description: Option<String>,
+    pub github_repo: Option<String>,
+    pub status: Option<PluginStatus>,
     pub tags: Option<Vec<String>>,
 }
 
@@ -125,6 +128,8 @@ pub struct PluginResponse {
     pub code: String,
     pub name: String,
     pub description: Option<String>,
+    pub github_repo: Option<String>,
+    pub status: PluginStatus,
     pub publisher: UserInfo,
     pub upvote_count: i32,
     pub downvote_count: i32,
@@ -150,11 +155,13 @@ pub struct Plugin {
     pub code: String,
     pub name: String,
     pub description: Option<String>,
+    pub github_repo: Option<String>,
     pub publisher_id: i64,
     pub created_at: Option<NaiveDateTime>,
     pub updated_at: Option<NaiveDateTime>,
     pub upvote_count: Option<i32>,
     pub downvote_count: Option<i32>,
+    pub status: PluginStatus,
 }
 
 #[derive(Insertable)]
@@ -163,7 +170,9 @@ pub struct NewPlugin {
     pub code: String,
     pub name: String,
     pub description: Option<String>,
+    pub github_repo: Option<String>,
     pub publisher_id: i64,
+    pub status: PluginStatus,
 }
 
 #[derive(Queryable, Selectable, Identifiable, Debug, Clone)]

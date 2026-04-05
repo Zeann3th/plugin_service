@@ -5,7 +5,6 @@ use crate::{
     state::SharedState,
 };
 use super::model::*;
-use aws_sdk_s3::presigning::PresigningConfig;
 use diesel::prelude::*;
 use diesel::pg::PgConnection;
 use std::collections::HashMap;
@@ -61,7 +60,9 @@ pub async fn create_plugin(
                 code: payload.code.clone(),
                 name: payload.name.clone(),
                 description: payload.description.clone(),
+                github_repo: payload.github_repo.clone(),
                 publisher_id: claims.sub,
+                status: PluginStatus::Draft,
             };
 
             let plugin: Plugin = diesel::insert_into(plugins::table)
@@ -121,9 +122,10 @@ pub async fn get_upload_url(
     state: SharedState,
     claims: Claims,
     id: i64,
+    version_name: String,
     payload: UploadPluginRequest,
 ) -> Result<UploadPluginResponse, AppError> {
-    tracing::info!("Generating upload URL for plugin id: {}, version: {:?}", id, payload.version);
+    tracing::info!("Generating upload URL for plugin id: {}, version: {}", id, version_name);
     let mut conn = state
         .db_pool
         .get()
@@ -141,13 +143,11 @@ pub async fn get_upload_url(
         ));
     }
 
-    let version_str = payload.version.clone().unwrap_or_else(|| "1.0.0".to_string());
-
     let version = plugin_versions::table
         .filter(plugin_versions::plugin_id.eq(id))
-        .filter(plugin_versions::version.eq(&version_str))
+        .filter(plugin_versions::version.eq(&version_name))
         .first::<PluginVersion>(&mut conn)
-        .map_err(|_| AppError::NotFound(format!("Version {} not found", version_str)))?;
+        .map_err(|_| AppError::NotFound(format!("Version {} not found", version_name)))?;
 
     let extension = Path::new(&payload.filename)
         .extension()
@@ -169,6 +169,8 @@ pub async fn get_upload_url(
         .execute(&mut conn)
         .map_err(|e| AppError::DatabaseError(format!("Failed to update file path: {}", e)))?;
 
+    // Use standard s3_client which signs against s3_endpoint (internal R2 endpoint)
+    // The browser will upload directly to this URL.
     let presigned_req = state
         .s3_client
         .put_object()
@@ -176,7 +178,7 @@ pub async fn get_upload_url(
         .key(&key)
         .content_length(payload.file_size)
         .presigned(
-            PresigningConfig::expires_in(Duration::from_secs(3600))
+            aws_sdk_s3::presigning::PresigningConfig::expires_in(Duration::from_secs(3600))
                 .unwrap(),
         )
         .await
@@ -184,17 +186,8 @@ pub async fn get_upload_url(
             AppError::InternalServerError(format!("Failed to generate presigned URL: {}", e))
         })?;
 
-    let presigned_url = presigned_req.uri().to_string();
-    let public_url = presigned_url.replace(
-        &format!(
-            "{}/{}",
-            state.config.s3_endpoint, state.config.s3_bucket
-        ),
-        &state.config.s3_public_endpoint,
-    );
-
     Ok(UploadPluginResponse {
-        upload_url: public_url,
+        upload_url: presigned_req.uri().to_string(),
     })
 }
 
@@ -204,9 +197,9 @@ pub async fn publish_plugin(
     state: SharedState,
     claims: Claims,
     id: i64,
-    version_str: Option<String>,
+    version_name: String,
 ) -> Result<(), AppError> {
-    tracing::info!("Publishing plugin id: {}, version: {:?}", id, version_str);
+    tracing::info!("Publishing plugin id: {}, version: {}", id, version_name);
     let mut conn = state
         .db_pool
         .get()
@@ -224,15 +217,11 @@ pub async fn publish_plugin(
         ));
     }
 
-    let mut query = plugin_versions::table.filter(plugin_versions::plugin_id.eq(id)).into_boxed();
-    if let Some(v) = version_str {
-        query = query.filter(plugin_versions::version.eq(v));
-    } else {
-        query = query.order_by(plugin_versions::created_at.desc());
-    }
-
-    let version = query.first::<PluginVersion>(&mut conn)
-        .map_err(|_| AppError::NotFound("Version not found".to_string()))?;
+    let version = plugin_versions::table
+        .filter(plugin_versions::plugin_id.eq(id))
+        .filter(plugin_versions::version.eq(&version_name))
+        .first::<PluginVersion>(&mut conn)
+        .map_err(|_| AppError::NotFound(format!("Version {} not found", version_name)))?;
 
     if version.file_path.is_none() {
         return Err(AppError::BadRequest(
@@ -260,8 +249,6 @@ fn get_installation_status(
             if latest == user {
                 InstallationStatus::Installed
             } else {
-                // Simple string comparison for versions. 
-                // In a real app, you might want to use a semver parser.
                 InstallationStatus::Updatable
             }
         }
@@ -311,23 +298,27 @@ pub async fn get_plugins(
         count_query = count_query.filter(plugins::id.eq_any(plugin_ids_subquery));
     }
 
-    // Visibility filter for total count and query
     let requester_id = claims.as_ref().map(|c| c.sub).unwrap_or(0);
     let is_admin = claims.as_ref().map(|c| c.role == UserRole::Admin).unwrap_or(false);
 
     if !is_admin {
-        // A plugin is visible if it has at least one published version OR the requester is the owner
         let published_subquery = plugin_versions::table
             .filter(plugin_versions::status.eq(PluginStatus::Published))
             .select(plugin_versions::plugin_id);
 
         db_query = db_query.filter(
             plugins::publisher_id.eq(requester_id)
-            .or(plugins::id.eq_any(published_subquery.clone()))
+            .or(
+                plugins::status.eq(PluginStatus::Published)
+                .and(plugins::id.eq_any(published_subquery.clone()))
+            )
         );
         count_query = count_query.filter(
             plugins::publisher_id.eq(requester_id)
-            .or(plugins::id.eq_any(published_subquery))
+            .or(
+                plugins::status.eq(PluginStatus::Published)
+                .and(plugins::id.eq_any(published_subquery))
+            )
         );
     }
 
@@ -354,7 +345,6 @@ pub async fn get_plugins(
 
     let plugin_ids: Vec<i64> = plugins_raw.iter().map(|(p, _)| p.id).collect();
 
-    // Batch fetch tags
     let all_tags_raw: Vec<(i64, String)> = plugin_tags::table
         .inner_join(tags::table)
         .filter(plugin_tags::plugin_id.eq_any(&plugin_ids))
@@ -367,23 +357,36 @@ pub async fn get_plugins(
         tags_map.entry(pid).or_default().push(tname);
     }
 
-    // Batch fetch latest versions (using DISTINCT ON if Postgres, but for simplicity we load all published and pick latest in memory)
-    // Actually, Postgres DISTINCT ON is better:
-    let latest_versions_raw: Vec<PluginVersion> = plugin_versions::table
-        .filter(plugin_versions::plugin_id.eq_any(&plugin_ids))
-        .filter(plugin_versions::status.eq(PluginStatus::Published))
-        .order_by((plugin_versions::plugin_id, plugin_versions::created_at.desc()))
-        .distinct_on(plugin_versions::plugin_id)
-        .select(PluginVersion::as_select())
-        .load(&mut conn)
-        .map_err(|e| AppError::DatabaseError(format!("Failed to load latest versions: {}", e)))?;
+    let latest_versions_raw: Vec<PluginVersion> = if is_admin {
+        plugin_versions::table
+            .filter(plugin_versions::plugin_id.eq_any(&plugin_ids))
+            .order_by((plugin_versions::plugin_id, plugin_versions::created_at.desc()))
+            .distinct_on(plugin_versions::plugin_id)
+            .select(PluginVersion::as_select())
+            .load(&mut conn)
+    } else {
+        plugin_versions::table
+            .filter(plugin_versions::plugin_id.eq_any(&plugin_ids))
+            .filter(
+                plugin_versions::status.eq(PluginStatus::Published)
+                .or(plugin_versions::plugin_id.eq_any(
+                    plugins::table
+                        .filter(plugins::id.eq_any(&plugin_ids))
+                        .filter(plugins::publisher_id.eq(requester_id))
+                        .select(plugins::id)
+                ))
+            )
+            .order_by((plugin_versions::plugin_id, plugin_versions::created_at.desc()))
+            .distinct_on(plugin_versions::plugin_id)
+            .select(PluginVersion::as_select())
+            .load(&mut conn)
+    }.map_err(|e| AppError::DatabaseError(format!("Failed to load latest versions: {}", e)))?;
 
     let mut latest_versions_map: HashMap<i64, String> = HashMap::new();
     for v in latest_versions_raw {
         latest_versions_map.insert(v.plugin_id, v.version);
     }
 
-    // Batch fetch user installations
     let mut user_versions_map: HashMap<i64, String> = HashMap::new();
     if let Some(ref c) = claims {
         let user_plugins_raw: Vec<(i64, String)> = user_plugins::table
@@ -400,8 +403,6 @@ pub async fn get_plugins(
 
     let items = plugins_raw.into_iter().filter_map(|(p, u)| {
         let latest_v = latest_versions_map.get(&p.id).cloned();
-        
-        // Visibility control
         let is_owner = requester_id == p.publisher_id;
         if latest_v.is_none() && !is_owner && !is_admin {
             return None;
@@ -415,6 +416,8 @@ pub async fn get_plugins(
             code: p.code,
             name: p.name,
             description: p.description,
+            github_repo: p.github_repo,
+            status: p.status,
             publisher: UserInfo {
                 id: u.id,
                 username: u.username,
@@ -440,7 +443,6 @@ pub async fn get_plugins(
 
 #[tracing::instrument(skip(state))]
 pub async fn get_plugin_by_id(state: SharedState, claims: Option<Claims>, id: i64) -> Result<PluginResponse, AppError> {
-    tracing::debug!("Fetching plugin by id: {}", id);
     let mut conn = state
         .db_pool
         .get()
@@ -453,7 +455,6 @@ pub async fn get_plugin_by_id(state: SharedState, claims: Option<Claims>, id: i6
         .first(&mut conn)
         .map_err(|_| AppError::NotFound("Plugin not found".to_string()))?;
 
-    // Get latest version
     let latest_v: Option<String> = plugin_versions::table
         .filter(plugin_versions::plugin_id.eq(p.id))
         .filter(plugin_versions::status.eq(PluginStatus::Published))
@@ -463,7 +464,6 @@ pub async fn get_plugin_by_id(state: SharedState, claims: Option<Claims>, id: i6
         .optional()
         .map_err(|e| AppError::DatabaseError(format!("Failed to fetch latest version: {}", e)))?;
 
-    // Check user installation status
     let mut user_v: Option<String> = None;
     if let Some(ref c) = claims {
         user_v = user_plugins::table
@@ -475,7 +475,6 @@ pub async fn get_plugin_by_id(state: SharedState, claims: Option<Claims>, id: i6
             .map_err(|e| AppError::DatabaseError(format!("Failed to fetch user plugin: {}", e)))?;
     }
 
-    // Fetch versions
     let mut v_query = plugin_versions::table
         .filter(plugin_versions::plugin_id.eq(p.id))
         .into_boxed();
@@ -512,6 +511,8 @@ pub async fn get_plugin_by_id(state: SharedState, claims: Option<Claims>, id: i6
         code: p.code,
         name: p.name,
         description: p.description,
+        github_repo: p.github_repo,
+        status: p.status,
         publisher: UserInfo {
             id: u.id,
             username: u.username,
@@ -534,7 +535,6 @@ pub async fn update_plugin(
     id: i64,
     payload: UpdatePluginRequest,
 ) -> Result<(), AppError> {
-    tracing::info!("Updating plugin metadata for id: {}", id);
     let mut conn = state
         .db_pool
         .get()
@@ -548,53 +548,37 @@ pub async fn update_plugin(
             .map_err(|_| AppError::NotFound("Plugin not found".to_string()))?;
 
         if plugin.publisher_id != claims.sub && claims.role != UserRole::Admin {
-            return Err(AppError::Forbidden(
-                "Not authorized to update this plugin".to_string(),
-            ));
+            return Err(AppError::Forbidden("Not authorized".to_string()));
         }
 
         diesel::update(plugins::table.filter(plugins::id.eq(id)))
             .set((
                 payload.name.as_ref().map(|n| plugins::name.eq(n)),
                 payload.description.as_ref().map(|d| plugins::description.eq(d)),
+                payload.github_repo.as_ref().map(|g| plugins::github_repo.eq(g)),
+                payload.status.as_ref().map(|s| plugins::status.eq(s)),
                 plugins::updated_at.eq(chrono::Utc::now().naive_utc()),
             ))
             .execute(conn)
             .map_err(|e| AppError::DatabaseError(format!("Failed to update plugin: {}", e)))?;
 
-        // Handle tags update
         if let Some(tag_names) = payload.tags {
-            // Remove existing links
             diesel::delete(plugin_tags::table.filter(plugin_tags::plugin_id.eq(id)))
                 .execute(conn)
                 .map_err(|e| AppError::DatabaseError(format!("Failed to clear old tags: {}", e)))?;
 
             for tag_name in tag_names {
                 let tag_name = tag_name.to_lowercase();
-                
                 let tag: Tag = diesel::insert_into(tags::table)
                     .values(NewTag { name: tag_name.clone() })
-                    .on_conflict(tags::name)
-                    .do_update()
-                    .set(tags::name.eq(tags::name))
-                    .get_result(conn)
+                    .on_conflict(tags::name).do_update().set(tags::name.eq(tags::name)).get_result(conn)
                     .map_err(|e| AppError::DatabaseError(format!("Failed to ensure tag: {}", e)))?;
 
-                let new_plugin_tag = NewPluginTag {
-                    plugin_id: id,
-                    tag_id: tag.id,
-                };
-
-                diesel::insert_into(plugin_tags::table)
-                    .values(&new_plugin_tag)
-                    .on_conflict_do_nothing()
-                    .execute(conn)
+                diesel::insert_into(plugin_tags::table).values(NewPluginTag { plugin_id: id, tag_id: tag.id }).on_conflict_do_nothing().execute(conn)
                     .map_err(|e| AppError::DatabaseError(format!("Failed to link tag: {}", e)))?;
             }
-
             cleanup_orphan_tags(conn)?;
         }
-
         Ok(())
     })
 }
@@ -607,244 +591,66 @@ pub async fn update_plugin_version(
     version_str: String,
     payload: UpdatePluginVersionRequest,
 ) -> Result<(), AppError> {
-    tracing::info!("Updating plugin version status for id: {}, version: {}", id, version_str);
     let mut conn = state
         .db_pool
         .get()
         .map_err(|e| AppError::DatabaseError(format!("Failed to get DB connection: {}", e)))?;
 
     conn.transaction::<_, AppError, _>(|conn| {
-        let plugin = plugins::table
-            .filter(plugins::id.eq(id))
-            .select(Plugin::as_select())
-            .first::<Plugin>(conn)
+        let plugin = plugins::table.filter(plugins::id.eq(id)).select(Plugin::as_select()).first::<Plugin>(conn)
             .map_err(|_| AppError::NotFound("Plugin not found".to_string()))?;
 
         if plugin.publisher_id != claims.sub && claims.role != UserRole::Admin {
-            return Err(AppError::Forbidden(
-                "Not authorized to update this version".to_string(),
-            ));
+            return Err(AppError::Forbidden("Not authorized".to_string()));
         }
 
-        let updated_count = diesel::update(
-            plugin_versions::table
-                .filter(plugin_versions::plugin_id.eq(id))
-                .filter(plugin_versions::version.eq(version_str)),
-        )
-        .set((
-            payload.status.map(|s| plugin_versions::status.eq(s)),
-            plugin_versions::updated_at.eq(chrono::Utc::now().naive_utc()),
-        ))
-        .execute(conn)
-        .map_err(|e| AppError::DatabaseError(format!("Failed to update version: {}", e)))?;
+        let updated_count = diesel::update(plugin_versions::table.filter(plugin_versions::plugin_id.eq(id)).filter(plugin_versions::version.eq(version_str)))
+        .set((payload.status.map(|s| plugin_versions::status.eq(s)), plugin_versions::updated_at.eq(chrono::Utc::now().naive_utc())))
+        .execute(conn).map_err(|e| AppError::DatabaseError(format!("Failed to update version: {}", e)))?;
 
-        if updated_count == 0 {
-            return Err(AppError::NotFound("Version not found".to_string()));
-        }
-
+        if updated_count == 0 { return Err(AppError::NotFound("Version not found".to_string())); }
         Ok(())
     })
 }
 
 #[tracing::instrument(skip(state))]
 pub async fn delete_plugin(state: SharedState, claims: Claims, id: i64) -> Result<(), AppError> {
-    tracing::info!("Deleting plugin id: {}", id);
-    let mut conn = state
-        .db_pool
-        .get()
-        .map_err(|e| AppError::DatabaseError(format!("Failed to get DB connection: {}", e)))?;
-
+    let mut conn = state.db_pool.get().map_err(|e| AppError::DatabaseError(format!("Failed to connect: {}", e)))?;
     conn.transaction::<_, AppError, _>(|conn| {
-        let plugin = plugins::table
-            .filter(plugins::id.eq(id))
-            .select(Plugin::as_select())
-            .first::<Plugin>(conn)
+        let plugin = plugins::table.filter(plugins::id.eq(id)).select(Plugin::as_select()).first::<Plugin>(conn)
             .map_err(|_| AppError::NotFound("Plugin not found".to_string()))?;
-
-        if plugin.publisher_id != claims.sub && claims.role != UserRole::Admin {
-            return Err(AppError::Forbidden(
-                "Not authorized to delete this plugin".to_string(),
-            ));
-        }
-
-        diesel::delete(plugins::table.filter(plugins::id.eq(id)))
-            .execute(conn)
-            .map_err(|e| AppError::DatabaseError(format!("Failed to delete plugin: {}", e)))?;
-
+        if plugin.publisher_id != claims.sub && claims.role != UserRole::Admin { return Err(AppError::Forbidden("Not authorized".to_string())); }
+        diesel::delete(plugins::table.filter(plugins::id.eq(id))).execute(conn).map_err(|e| AppError::DatabaseError(format!("Delete failed: {}", e)))?;
         cleanup_orphan_tags(conn)?;
-
         Ok(())
     })
 }
 
 #[tracing::instrument(skip(state))]
-pub async fn delete_plugin_version(
-    state: SharedState,
-    claims: Claims,
-    id: i64,
-    version: String,
-) -> Result<(), AppError> {
-    tracing::info!("Deleting plugin version for id: {}, version: {}", id, version);
-    let mut conn = state
-        .db_pool
-        .get()
-        .map_err(|e| AppError::DatabaseError(format!("Failed to get DB connection: {}", e)))?;
-
+pub async fn delete_plugin_version(state: SharedState, claims: Claims, id: i64, version: String) -> Result<(), AppError> {
+    let mut conn = state.db_pool.get().map_err(|e| AppError::DatabaseError(format!("Failed to connect: {}", e)))?;
     conn.transaction::<_, AppError, _>(|conn| {
-        let plugin = plugins::table
-            .filter(plugins::id.eq(id))
-            .select(Plugin::as_select())
-            .first::<Plugin>(conn)
+        let plugin = plugins::table.filter(plugins::id.eq(id)).select(Plugin::as_select()).first::<Plugin>(conn)
             .map_err(|_| AppError::NotFound("Plugin not found".to_string()))?;
-
-        if plugin.publisher_id != claims.sub && claims.role != UserRole::Admin {
-            return Err(AppError::Forbidden(
-                "Not authorized to delete this version".to_string(),
-            ));
-        }
-
-        let deleted_count = diesel::delete(
-            plugin_versions::table
-                .filter(plugin_versions::plugin_id.eq(id))
-                .filter(plugin_versions::version.eq(version)),
-        )
-        .execute(conn)
-        .map_err(|e| AppError::DatabaseError(format!("Failed to delete version: {}", e)))?;
-
-        if deleted_count == 0 {
-            return Err(AppError::NotFound("Version not found".to_string()));
-        }
-
+        if plugin.publisher_id != claims.sub && claims.role != UserRole::Admin { return Err(AppError::Forbidden("Not authorized".to_string())); }
+        let deleted_count = diesel::delete(plugin_versions::table.filter(plugin_versions::plugin_id.eq(id)).filter(plugin_versions::version.eq(version)))
+        .execute(conn).map_err(|e| AppError::DatabaseError(format!("Delete failed: {}", e)))?;
+        if deleted_count == 0 { return Err(AppError::NotFound("Version not found".to_string())); }
         Ok(())
     })
 }
 
 fn cleanup_orphan_tags(conn: &mut PgConnection) -> Result<(), AppError> {
-    // Delete tags that are not associated with any plugin
-    diesel::delete(
-        tags::table.filter(
-            diesel::dsl::not(diesel::dsl::exists(
-                plugin_tags::table.filter(plugin_tags::tag_id.eq(tags::id)),
-            )),
-        ),
-    )
-    .execute(conn)
-    .map_err(|e| AppError::DatabaseError(format!("Failed to cleanup orphan tags: {}", e)))?;
-
+    diesel::delete(tags::table.filter(diesel::dsl::not(diesel::dsl::exists(plugin_tags::table.filter(plugin_tags::tag_id.eq(tags::id))))))
+    .execute(conn).map_err(|e| AppError::DatabaseError(format!("Cleanup failed: {}", e)))?;
     Ok(())
 }
 
 #[tracing::instrument(skip(state))]
-pub async fn vote_plugin(
-    state: SharedState,
-    _claims: Claims,
-    id: i64,
-    payload: VoteRequest,
-) -> Result<(), AppError> {
-    tracing::info!("Voting for plugin id: {}, is_upvote: {}", id, payload.is_upvote);
-    let mut conn = state
-        .db_pool
-        .get()
-        .map_err(|e| AppError::DatabaseError(format!("Failed to get DB connection: {}", e)))?;
-
-    if payload.is_upvote {
-        diesel::update(plugins::table.filter(plugins::id.eq(id)))
-            .set(plugins::upvote_count.eq(plugins::upvote_count + 1))
-            .execute(&mut conn)
-    } else {
-        diesel::update(plugins::table.filter(plugins::id.eq(id)))
-            .set(plugins::downvote_count.eq(plugins::downvote_count + 1))
-            .execute(&mut conn)
-    }
-    .map_err(|e| AppError::DatabaseError(format!("Failed to vote: {}", e)))?;
-
+pub async fn vote_plugin(state: SharedState, _claims: Claims, id: i64, payload: VoteRequest) -> Result<(), AppError> {
+    let mut conn = state.db_pool.get().map_err(|e| AppError::DatabaseError(format!("Connect failed: {}", e)))?;
+    if payload.is_upvote { diesel::update(plugins::table.filter(plugins::id.eq(id))).set(plugins::upvote_count.eq(plugins::upvote_count + 1)).execute(&mut conn) }
+    else { diesel::update(plugins::table.filter(plugins::id.eq(id))).set(plugins::downvote_count.eq(plugins::downvote_count + 1)).execute(&mut conn) }
+    .map_err(|e| AppError::DatabaseError(format!("Vote failed: {}", e)))?;
     Ok(())
-}
-
-/// Download: uses stored file_path on version.
-/// Records download in user_plugins if authenticated.
-#[tracing::instrument(skip(state))]
-pub async fn download_plugin(
-    state: SharedState,
-    claims: Option<Claims>,
-    id: i64,
-    version_str: Option<String>
-) -> Result<String, AppError> {
-    tracing::info!("Generating download URL for plugin id: {}, version: {:?}", id, version_str);
-    let mut conn = state
-        .db_pool
-        .get()
-        .map_err(|e| AppError::DatabaseError(format!("Failed to get DB connection: {}", e)))?;
-
-    let mut query = plugin_versions::table.filter(plugin_versions::plugin_id.eq(id)).into_boxed();
-    
-    if let Some(v) = version_str {
-        query = query.filter(plugin_versions::version.eq(v));
-    } else {
-        query = query.filter(plugin_versions::status.eq(PluginStatus::Published))
-                     .order_by(plugin_versions::created_at.desc());
-    }
-
-    let version = query.first::<PluginVersion>(&mut conn)
-        .map_err(|_| AppError::NotFound("Version not found or not published".to_string()))?;
-
-    if version.status != PluginStatus::Published {
-        return Err(AppError::BadRequest(
-            "Plugin version is not published yet".to_string(),
-        ));
-    }
-
-    let key = version
-        .file_path
-        .ok_or_else(|| AppError::BadRequest("No file available for this version".to_string()))?;
-
-    // Increment download count
-    diesel::update(plugin_versions::table.filter(plugin_versions::id.eq(version.id)))
-        .set(plugin_versions::download_count.eq(plugin_versions::download_count + 1))
-        .execute(&mut conn)
-        .map_err(|e| {
-            AppError::DatabaseError(format!("Failed to increment download count: {}", e))
-        })?;
-
-    // Record user download if authenticated
-    if let Some(c) = claims {
-        let new_user_plugin = NewUserPlugin {
-            user_id: c.sub,
-            plugin_id: id,
-            version: version.version.clone(),
-        };
-
-        diesel::insert_into(user_plugins::table)
-            .values(&new_user_plugin)
-            .on_conflict((user_plugins::user_id, user_plugins::plugin_id))
-            .do_update()
-            .set(user_plugins::version.eq(version.version.clone()))
-            .execute(&mut conn)
-            .map_err(|e| AppError::DatabaseError(format!("Failed to record download: {}", e)))?;
-    }
-
-    let presigned_req = state
-        .s3_client
-        .get_object()
-        .bucket(&state.config.s3_bucket)
-        .key(key)
-        .presigned(
-            PresigningConfig::expires_in(Duration::from_secs(3600))
-                .unwrap(),
-        )
-        .await
-        .map_err(|e| {
-            AppError::InternalServerError(format!("Failed to generate presigned URL: {}", e))
-        })?;
-
-    let presigned_url = presigned_req.uri().to_string();
-    let public_url = presigned_url.replace(
-        &format!(
-            "{}/{}",
-            state.config.s3_endpoint, state.config.s3_bucket
-        ),
-        &state.config.s3_public_endpoint,
-    );
-
-    Ok(public_url)
 }

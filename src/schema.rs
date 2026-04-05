@@ -36,6 +36,9 @@ diesel::table! {
 }
 
 diesel::table! {
+    use diesel::sql_types::*;
+    use super::sql_types::PluginStatus;
+
     plugins (id) {
         id -> Int8,
         #[max_length = 255]
@@ -48,6 +51,9 @@ diesel::table! {
         updated_at -> Nullable<Timestamp>,
         upvote_count -> Nullable<Int4>,
         downvote_count -> Nullable<Int4>,
+        status -> PluginStatus,
+        #[max_length = 255]
+        github_repo -> Nullable<Varchar>,
     }
 }
 
